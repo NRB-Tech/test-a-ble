@@ -6,7 +6,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from test_a_ble import setup_logging
 from test_a_ble.ble_manager import BLEManager
 from test_a_ble.test_runner import TestRunner
 
@@ -24,22 +23,27 @@ def mock_ble_manager():
 @pytest.fixture
 def test_runner(mock_ble_manager):
     """Create a test runner with a mock BLE manager."""
-    setup_logging(verbose=True)
     return TestRunner(mock_ble_manager)
 
 
-@pytest.fixture
-def reset_timestamp():
-    """Reset the timestamp file before each test."""
-    # Delete the timestamp file if it exists
+def reset_now():
+    """Reset the timestamp file and package import."""
     if os.path.exists(TIMESTAMP_FILE):
         os.remove(TIMESTAMP_FILE)
 
     if "test_discovery_test_package" in sys.modules:
         del sys.modules["test_discovery_test_package"]
 
+
+@pytest.fixture(autouse=True)
+def reset():
+    """Reset the timestamp file and package import before and after each test."""
+    reset_now()
+
     # Return the timestamp file path
-    return TIMESTAMP_FILE
+    yield TIMESTAMP_FILE
+
+    reset_now()
 
 
 def was_package_imported():
@@ -47,7 +51,7 @@ def was_package_imported():
     return os.path.exists(TIMESTAMP_FILE)
 
 
-def test_discover_specific_function(test_runner, reset_timestamp):
+def test_discover_specific_function(test_runner):
     """Test discovering a specific function."""
     # Change to the test package directory
     with patch("os.getcwd", return_value=TEST_PACKAGE_DIR):
@@ -69,7 +73,7 @@ def test_discover_specific_function(test_runner, reset_timestamp):
     assert was_package_imported(), "Package was not imported during test discovery"
 
 
-def test_discover_specific_class(test_runner, reset_timestamp):
+def test_discover_specific_class(test_runner):
     """Test discovering a specific class."""
     # Change to the test package directory
     with patch("os.getcwd", return_value=TEST_PACKAGE_DIR):
@@ -91,7 +95,7 @@ def test_discover_specific_class(test_runner, reset_timestamp):
     assert was_package_imported(), "Package was not imported during test discovery"
 
 
-def test_discover_all_tests_from_cwd(test_runner, reset_timestamp):
+def test_discover_all_tests_from_cwd(test_runner):
     """Test discovering all tests from the current working directory."""
     # Change to the test package directory
     with patch("os.getcwd", return_value=TEST_PACKAGE_DIR):
@@ -128,7 +132,7 @@ def test_discover_all_tests_from_cwd(test_runner, reset_timestamp):
     assert was_package_imported(), "Package was not imported during test discovery"
 
 
-def test_discover_with_relative_path(test_runner, reset_timestamp):
+def test_discover_with_relative_path(test_runner):
     """Test discovering tests with a relative path."""
     # Get the relative path from the current directory to the test package
     current_dir = os.getcwd()
@@ -157,7 +161,7 @@ def test_discover_with_relative_path(test_runner, reset_timestamp):
     assert was_package_imported(), "Package was not imported during test discovery"
 
 
-def test_discover_with_absolute_path(test_runner, reset_timestamp):
+def test_discover_with_absolute_path(test_runner):
     """Test discovering tests with an absolute path."""
     # Discover tests with the absolute path
     tests = test_runner.discover_tests([TEST_PACKAGE_DIR])
@@ -182,7 +186,7 @@ def test_discover_with_absolute_path(test_runner, reset_timestamp):
     assert was_package_imported(), "Package was not imported during test discovery"
 
 
-def test_discover_with_file_wildcard(test_runner, reset_timestamp):
+def test_discover_with_file_wildcard(test_runner):
     """Test discovering tests with a wildcard for test files."""
     # Change to the test package directory
     with patch("os.getcwd", return_value=TEST_PACKAGE_DIR):
@@ -204,7 +208,7 @@ def test_discover_with_file_wildcard(test_runner, reset_timestamp):
     assert was_package_imported(), "Package was not imported during test discovery"
 
 
-def test_discover_with_function_wildcard(test_runner, reset_timestamp):
+def test_discover_with_function_wildcard(test_runner):
     """Test discovering tests with a wildcard for test functions."""
     # Change to the test package directory
     with patch("os.getcwd", return_value=TEST_PACKAGE_DIR):

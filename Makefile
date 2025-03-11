@@ -51,8 +51,18 @@ clean-test: ## remove test and coverage artifacts
 	rm -fr htmlcov/
 	rm -fr .pytest_cache/
 
-lint: ## check style with flake8
-	flake8 test_a_ble tests
+lint: ## check style
+	black --check .
+	isort --check .
+	flake8 .
+
+format: ## format code
+	black .
+	isort .
+
+security: ## run security checks
+	bandit -c pyproject.toml -r .
+	safety scan
 
 pre-commit: ## run pre-commit checks
 	pre-commit run --all-files
@@ -70,10 +80,6 @@ coverage: ## check code coverage quickly with the default Python
 	$(BROWSER) htmlcov/index.html
 
 docs: ## generate Sphinx HTML documentation, including API docs
-	# Comment out these lines to prevent regenerating API docs
-	# rm -f docs/source/test_a_ble.rst
-	# rm -f docs/source/modules.rst
-	# sphinx-apidoc -o docs/source test_a_ble
 	$(MAKE) -C docs clean
 	$(MAKE) -C docs html
 	$(BROWSER) docs/build/html/index.html

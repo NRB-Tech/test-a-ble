@@ -39,3 +39,44 @@ asyncio_default_fixture_loop_scope = "function"
 # Exclude specific classes from collection to avoid PytestCollectionWarning
 python_classes = "Test[A-Z][a-zA-Z0-9]*(?<!Context|Status|Exception|Failure|Skip)"
 norecursedirs = ["examples","test_discovery_test_package"]
+
+[tool.bandit]
+exclude_dirs = [".tox"]
+skips = ["B101", "B404", "B607"]
+
+[tool.tox]
+min_version = "4.0"
+env_list = ["py312", "py313"]
+isolated_build = true
+skip_missing_interpreters = false
+requires = ["virtualenv>=20.0.0"]
+
+[tool.tox.env.default]
+deps = [".[lint,test]"]
+commands = [
+    "black --check .",
+    "isort --check .",
+    "flake8 .",
+    "pytest {posargs:tests}",
+]
+
+[tool.tox.env.lint]
+deps = [".[lint]"]
+commands = [
+    "black --check .",
+    "isort --check .",
+    "flake8 .",
+]
+
+[tool.tox.env.format]
+deps = [".[lint]"]
+commands = [
+    "black .",
+    "isort .",
+]
+
+[tool.tox.env.py312]
+base_python = ["python3.12"]
+
+[tool.tox.env.py313]
+base_python = ["python3.13"]

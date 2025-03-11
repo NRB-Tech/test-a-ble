@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from test_a_ble import setup_logging
 from test_a_ble.ble_manager import BLEManager
 from test_a_ble.test_context import TestContext, TestStatus
 from test_a_ble.test_runner import TestRunner
@@ -25,7 +24,6 @@ def mock_ble_manager():
 @pytest.fixture
 def test_runner(mock_ble_manager):
     """Create a TestRunner instance for testing."""
-    setup_logging(verbose=True)
     return TestRunner(mock_ble_manager)
 
 

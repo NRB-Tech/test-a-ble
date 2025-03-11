@@ -10,7 +10,7 @@ You can install Test-a-BLE using pip:
 Requirements
 ------------
 
-Test-a-BLE requires Python 3.8 or higher and the following dependencies:
+Test-a-BLE requires Python 3.12 or higher and the following dependencies:
 
 * bleak>=0.22.3
 * rich>=12.0.0

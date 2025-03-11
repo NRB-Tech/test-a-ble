@@ -741,13 +741,13 @@ def main():
                     try:
                         loop.run_until_complete(asyncio.wait(remaining, timeout=1.0, loop=loop))
                     except Exception:
-                        pass
+                        pass  # nosec B110
 
                 # Close the loop
                 try:
                     loop.close()
                 except Exception:
-                    pass
+                    pass  # nosec B110
             except Exception as e:
                 logger.debug(f"Error during keyboard interrupt cleanup: {e}")
 

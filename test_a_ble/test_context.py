@@ -77,7 +77,7 @@ def ble_test_class(description=None):
 class TestStatus(Enum):
     """Enum for test execution status."""
 
-    PASS = "pass"
+    PASS = "pass"  # nosec B105
     FAIL = "fail"
     SKIP = "skip"
     ERROR = "error"

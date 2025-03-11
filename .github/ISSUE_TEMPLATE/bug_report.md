@@ -19,7 +19,7 @@ A clear and concise description of what you expected to happen.
 
 **Environment:**
  - OS: [e.g. macOS, Windows, Linux]
- - Python version: [e.g. 3.8, 3.9]
+ - Python version: [e.g. 3.12, 3.13]
  - Package version: [e.g. 0.1.0]
 
 **Additional context**

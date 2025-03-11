@@ -8,6 +8,7 @@ Usage: python scripts/bump_version.py [major|minor|patch]
 import argparse
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime
 
@@ -168,13 +169,18 @@ def main():
 
     if response == "y" or response == "yes":
         print("Running git commands...")
-        os.system(f"git commit -am 'Bump version to {new_version}'")
-        os.system(f"git tag -a v{new_version} -m 'Version {new_version}'")
+        subprocess.run(
+            ["git", "commit", "-am", f"Bump version to {new_version}"], check=True, shell=False
+        )  # nosec B603
+        subprocess.run(
+            ["git", "tag", "-a", f"v{new_version}", "-m", f"Version {new_version}"], check=True, shell=False
+        )  # nosec B603
 
         print("Do you want to push the changes? (y/n)")
         push_response = input().strip().lower()
         if push_response == "y" or push_response == "yes":
-            os.system("git push && git push --tags")
+            subprocess.run(["git", "push"], check=True, shell=False)  # nosec B603
+            subprocess.run(["git", "push", "--tags"], check=True, shell=False)  # nosec B603
             print("Changes pushed successfully.")
         else:
             print("Changes committed and tagged locally. Run 'git push && git push --tags' when ready.")

@@ -13,8 +13,6 @@ from typing import Any, Callable, Dict, List, Optional, Union
 from bleak import BleakClient, BleakScanner
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
-from CoreBluetooth import CBUUID
-from Foundation import NSArray
 
 logger = logging.getLogger(__name__)
 
@@ -24,33 +22,37 @@ def retrieveConnectedPeripheralsWithServices(
 ) -> list[BLEDevice]:
     """Retrieve connected peripherals with specified services."""
     devices = []
-    for p in scanner._backend._manager.central_manager.retrieveConnectedPeripheralsWithServices_(
-        NSArray.alloc().initWithArray_(list(map(CBUUID.UUIDWithString_, services)))
-    ):
-        if scanner._backend._use_bdaddr:
-            # HACK: retrieveAddressForPeripheral_ is undocumented but seems to do the
-            # trick
-            address_bytes: bytes = scanner._backend._manager.central_manager.retrieveAddressForPeripheral_(p)
-            address = address_bytes.hex(":").upper()
-        else:
-            address = p.identifier().UUIDString()
+    if sys.platform == "darwin":
+        from CoreBluetooth import CBUUID
+        from Foundation import NSArray
 
-        device = scanner._backend.create_or_update_device(
-            address,
-            p.name(),
-            (p, scanner._backend._manager.central_manager.delegate()),
-            AdvertisementData(
-                local_name=p.name(),
-                manufacturer_data=None,
-                service_data=None,
-                service_uuids=None,
-                tx_power=None,
-                rssi=None,
-                platform_data=None,
-            ),
-        )
-        devices.append(device)
-    logger.debug(f"Found {len(devices)} connected devices with services {services}")
+        for p in scanner._backend._manager.central_manager.retrieveConnectedPeripheralsWithServices_(
+            NSArray.alloc().initWithArray_(list(map(CBUUID.UUIDWithString_, services)))
+        ):
+            if scanner._backend._use_bdaddr:
+                # HACK: retrieveAddressForPeripheral_ is undocumented but seems to do the
+                # trick
+                address_bytes: bytes = scanner._backend._manager.central_manager.retrieveAddressForPeripheral_(p)
+                address = address_bytes.hex(":").upper()
+            else:
+                address = p.identifier().UUIDString()
+
+            device = scanner._backend.create_or_update_device(
+                address,
+                p.name(),
+                (p, scanner._backend._manager.central_manager.delegate()),
+                AdvertisementData(
+                    local_name=p.name(),
+                    manufacturer_data=None,
+                    service_data=None,
+                    service_uuids=None,
+                    tx_power=None,
+                    rssi=None,
+                    platform_data=None,
+                ),
+            )
+            devices.append(device)
+        logger.debug(f"Found {len(devices)} connected devices with services {services}")
     return devices
 
 
@@ -213,6 +215,7 @@ class BLEManager:
                             logger.debug(f"Found device: {self.device.name or 'Unknown'} ({self.device.address})")
                         else:
                             logger.error(f"Could not find device with address {device_or_address}")
+                            self.device = None
                             return False
         else:
             self.device = device_or_address
@@ -240,6 +243,7 @@ class BLEManager:
                     await asyncio.sleep(retry_delay)
 
         logger.error(f"Failed to connect to device after {retry_count} attempts")
+        self.device = None
         return False
 
     async def disconnect(self):

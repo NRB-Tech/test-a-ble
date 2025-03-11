@@ -528,7 +528,7 @@ await test_context.unsubscribe_all()
 
 ## Python Version Compatibility
 
-The framework is compatible with Python 3.8+.
+The framework is compatible with Python 3.12+.
 
 ## Project-Specific structure
 
