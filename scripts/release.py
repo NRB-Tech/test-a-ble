@@ -144,24 +144,29 @@ def main():
     parser = argparse.ArgumentParser(description="Bump the version of the package.")
     parser.add_argument(
         "part",
+        nargs="?",
         choices=["major", "minor", "patch"],
-        help="The part of the version to bump",
+        help="The part of the version to bump (optional)",
     )
     args = parser.parse_args()
 
     current_version = get_current_version()
-    new_version = bump_version(current_version, args.part)
+    if args.part:
+        new_version = bump_version(current_version, args.part)
+        print(f"Bumping version from {current_version} to {new_version}")
 
-    print(f"Bumping version from {current_version} to {new_version}")
+        update_setup_py(new_version)
+        update_init_py(new_version)
+        update_docs_conf_py(new_version)
+        update_changelog(new_version)
 
-    update_setup_py(new_version)
-    update_init_py(new_version)
-    update_docs_conf_py(new_version)
-    update_changelog(new_version)
+        print(f"Version bumped to {new_version}")
+        print("Don't forget to commit the changes and create a new tag:")
+        print(f"git commit -am 'Bump version to {new_version}'")
+    else:
+        new_version = current_version
+        print("Commands to run to create a new tag:")
 
-    print(f"Version bumped to {new_version}")
-    print("Don't forget to commit the changes and create a new tag:")
-    print(f"git commit -am 'Bump version to {new_version}'")
     print(f"git tag -a v{new_version} -m 'Version {new_version}'")
     print("git push && git push --tags")
     print("\nDo you want to run the git commands now? (y/n)")
@@ -169,9 +174,10 @@ def main():
 
     if response == "y" or response == "yes":
         print("Running git commands...")
-        subprocess.run(
-            ["git", "commit", "-am", f"Bump version to {new_version}"], check=True, shell=False
-        )  # nosec B603
+        if args.part:
+            subprocess.run(
+                ["git", "commit", "-am", f"Bump version to {new_version}"], check=True, shell=False
+            )  # nosec B603
         subprocess.run(
             ["git", "tag", "-a", f"v{new_version}", "-m", f"Version {new_version}"], check=True, shell=False
         )  # nosec B603
