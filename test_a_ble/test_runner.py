@@ -194,7 +194,7 @@ class TestRunner:
                 List of files matching the wildcard
             """
             if not os.path.isdir(test_dir):
-                return None
+                return []
             # list files in test_dir that match the wildcard
             files = []
             for file in os.listdir(test_dir):
@@ -203,8 +203,7 @@ class TestRunner:
             return files
 
         def find_tests_in_module(
-            package_dir: str,
-            package_path: str,
+            package_dir: Optional[str],
             import_name: str,
             test_dir: str,
             test_file: str,
@@ -215,7 +214,6 @@ class TestRunner:
 
             Args:
                 package_dir: Directory of the package
-                package_path: Path to the package (in dot notation)
                 import_name: Import name of the module
                 method_or_wildcard: Method name or wildcard of the tests to
                                     find, or None to find all tests in the module
@@ -338,7 +336,7 @@ class TestRunner:
                 # Sort standalone functions by line number
                 function_tests.sort(key=lambda x: x[2])
 
-                tests = []
+                tests: list[Tuple[str, TestItem]] = []
                 # Add class tests to the order list first
                 for test_name, class_name, class_obj, method_obj, _ in class_tests:
                     tests.append((test_name, (class_name, class_obj, method_obj)))
@@ -404,14 +402,13 @@ class TestRunner:
 
             return find_tests_in_module(
                 package_dir,
-                package_path,
                 import_name,
                 test_dir,
                 test_file,
                 method_or_wildcard,
             )
 
-        tests = {}
+        tests: List[Tuple[str, List[TestNameItem]]] = []
         # Split the specifier by both '.' and '/' or '\' to handle different path formats
         path_parts = re.split(r"[./\\]", test_specifier)
         starts_with_slash = (
@@ -499,8 +496,11 @@ class TestRunner:
             test_method = wildcard
 
         logger.debug(f"Discovering tests in test_dir: {test_dir}, test_file: {test_file}, test_method: {test_method}")
-        package_name, package_dir = self._find_and_import_nearest_package(test_dir)
-        tests = []
+        if result := self._find_and_import_nearest_package(test_dir):
+            package_name, package_dir = result
+        else:
+            package_dir = None
+
         for test_file in test_files:
             module_name = os.path.splitext(os.path.basename(test_file))[0]
             module_tests = find_tests_in_file(package_dir, test_dir, test_file, test_method)
@@ -584,7 +584,6 @@ class TestRunner:
         try:
             # If this is a class method test, call setUp if it exists
             if test_class_instance:
-                class_name, class_obj, method = test_item
 
                 # Call setUp if it exists
                 if hasattr(test_class_instance, "setUp") and callable(test_class_instance.setUp):

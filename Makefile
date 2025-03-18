@@ -1,6 +1,13 @@
 .PHONY: clean clean-test clean-pyc clean-build docs help
 .DEFAULT_GOAL := help
 
+# If NO_UV is set, don't use uv to run commands
+ifdef NO_UV
+	PY_CMD_PREFIX :=
+else
+	PY_CMD_PREFIX := uv run
+endif
+
 define BROWSER_PYSCRIPT
 import os, webbrowser, sys
 
@@ -24,10 +31,10 @@ for line in sys.stdin:
 endef
 export PRINT_HELP_PYSCRIPT
 
-BROWSER := python -c "$$BROWSER_PYSCRIPT"
+BROWSER := $(PY_CMD_PREFIX) python -c "$$BROWSER_PYSCRIPT"
 
 help:
-	@python -c "$$PRINT_HELP_PYSCRIPT" < $(MAKEFILE_LIST)
+	@$(PY_CMD_PREFIX) python -c "$$PRINT_HELP_PYSCRIPT" < $(MAKEFILE_LIST)
 
 clean: clean-build clean-pyc clean-test ## remove all build, test, coverage and Python artifacts
 
@@ -52,31 +59,38 @@ clean-test: ## remove test and coverage artifacts
 	rm -fr .pytest_cache/
 
 lint: ## check style
-	black --check .
-	isort --check .
-	flake8 .
+	$(PY_CMD_PREFIX) black --check .
+	$(PY_CMD_PREFIX) isort --check .
+	$(PY_CMD_PREFIX) flake8 .
 
 format: ## format code
-	black .
-	isort .
+	$(PY_CMD_PREFIX) black .
+	$(PY_CMD_PREFIX) isort .
 
-security: ## run security checks
-	bandit -c pyproject.toml -r .
-	safety scan
+typecheck: ## type check code
+	$(PY_CMD_PREFIX) mypy
+
+bandit: ## run bandit security checks
+	$(PY_CMD_PREFIX) bandit -c pyproject.toml -r .
+
+safety: ## run safety checks
+	$(PY_CMD_PREFIX) safety scan
+
+security: bandit safety ## run security checks
 
 pre-commit: ## run pre-commit checks
-	pre-commit run --all-files
+	$(PY_CMD_PREFIX) pre-commit run --all-files
 
 test: ## run tests quickly with the default Python
-	pytest
+	$(PY_CMD_PREFIX) pytest
 
-test-all: ## run tests on every Python version with tox
-	tox
+check: ## run all checks
+	$(PY_CMD_PREFIX) tox
 
 coverage: ## check code coverage quickly with the default Python
-	coverage run --source test_a_ble -m pytest
-	coverage report -m
-	coverage html
+	$(PY_CMD_PREFIX) coverage run --source test_a_ble -m pytest
+	$(PY_CMD_PREFIX) coverage report -m
+	$(PY_CMD_PREFIX) coverage html
 	$(BROWSER) htmlcov/index.html
 
 docs: ## generate Sphinx HTML documentation, including API docs
@@ -85,17 +99,21 @@ docs: ## generate Sphinx HTML documentation, including API docs
 	$(BROWSER) docs/build/html/index.html
 
 servedocs: docs ## compile the docs watching for changes
-	watchmedo shell-command -p '*.rst' -c '$(MAKE) -C docs html' -R -D .
+	$(PY_CMD_PREFIX) watchmedo shell-command -p '*.rst' -c '$(MAKE) -C docs html' -R -D .
 
-release: dist ## package and upload a release
-	twine upload dist/*
-
-dist: clean ## builds source and wheel package
-	python -m build
-	ls -l dist
+build: clean ## builds source and wheel package
+	$(PY_CMD_PREFIX) python -m build
 
 install: clean ## install the package to the active Python's site-packages
+ifdef USE_UV
+	uv sync --no-default-groups
+else
 	pip install -e .
+endif
 
-dev-install: clean ## install the package and development dependencies
+dev-install: clean ## install the package and development dependencies. When using uv, dev dependencies are installed by default.
+ifdef USE_UV
+	uv sync
+else
 	pip install -e ".[dev]"
+endif

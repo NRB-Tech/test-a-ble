@@ -2,7 +2,7 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
+import pytest  # type: ignore
 
 from test_a_ble import __version__
 
@@ -299,11 +299,16 @@ async def test_unsubscribe_from_characteristic():
     mock_client.stop_notify = AsyncMock()
     manager.client = mock_client
 
+    # Mock device
+    mock_device = MagicMock()
+    mock_device.address = "00:11:22:33:44:55"
+    manager.device = mock_device
+
     # Setup active subscription
     char_uuid = "00002a37-0000-1000-8000-00805f9b34fb"
     callback = MagicMock()
     manager.notification_callbacks[char_uuid] = [callback]
-    manager.active_subscriptions[char_uuid] = True
+    manager.active_subscriptions.append(char_uuid)
 
     # Call unsubscribe_from_characteristic
     await manager.unsubscribe_from_characteristic(char_uuid)

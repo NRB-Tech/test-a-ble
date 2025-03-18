@@ -143,9 +143,9 @@ class NotificationWaiter:
         """Initialize the notification waiter."""
         self.characteristic_uuid = characteristic_uuid
         self.expected_value = expected_value
-        self.received_notifications = []
-        self.matching_notification = None  # Will store the matching notification data
-        self.failure_reason = None  # Will store failure message if applicable
+        self.received_notifications: list[bytes] = []
+        self.matching_notification: Optional[bytes] = None
+        self.failure_reason: Optional[str] = None
         self.complete_event = asyncio.Event()
 
     def check_notification(self, data: bytes) -> Tuple[bool, Optional[str]]:
@@ -245,11 +245,11 @@ class NotificationWaiter:
 class NotificationSubscription:
     """A helper class to manage notification subscriptions and waiters."""
 
-    def __init__(self, characteristic_uuid: str, initial_waiter: NotificationWaiter = None):
+    def __init__(self, characteristic_uuid: str, initial_waiter: Optional[NotificationWaiter] = None):
         """Initialize the notification subscription."""
         self.characteristic_uuid = characteristic_uuid
         self.waiter = initial_waiter
-        self.collected_notifications = []
+        self.collected_notifications: list[bytes] = []
 
     def on_notification(self, data):
         """Handle a notification."""
@@ -759,14 +759,19 @@ class TestContext:
             TimeoutError: If no notification is received within the timeout
         """
 
-        async def user_input_handler() -> Tuple[str, str]:
-            """Handle user input during the waiting period."""
+        async def user_input_handler() -> Optional[Tuple[str, str]]:
+            """
+            Handle user input during the waiting period.
+
+            Returns:
+                Tuple of user response and message, or None if user input is cancelled
+            """
             print("\nThe test will continue automatically when event is detected.")
             print(
                 "If nothing happens, type 's' or 'skip' to skip, 'f' or 'fail' to fail the test, or 'd' for debug info."
             )
 
-            session = PromptSession()
+            session = PromptSession()  # type: ignore
             with patch_stdout():
                 while True:
                     user_input = None
@@ -823,6 +828,8 @@ class TestContext:
                     else:
                         print("Invalid input. Type 's' to skip, 'f' to fail, or 'd' for debug info.")
 
+            return None
+
         waiter = await self.create_notification_waiter(characteristic_uuid, expected_value, False)
 
         # Start user input handler
@@ -845,21 +852,19 @@ class TestContext:
                 return self.handle_notification_waiter_result(waiter, timeout)
             elif user_input_task in done:
                 # User input finished first
-                user_response, message = user_input_task.result()
-                logger.info(f"User input task completed first: {message}")
+                if result := user_input_task.result():
+                    user_response, message = result
+                    logger.info(f"User input task completed first: {message}")
 
                 # Raise appropriate exception based on user input
                 if user_response == "skip":
                     raise TestSkip("User chose to skip test")
                 elif user_response == "fail":
                     raise TestFailure("User reported test failure")
-            else:
-                logger.info("Timeout occurred while waiting for notification or user input")
+                else:
+                    raise ValueError(f"Invalid user response: {user_response}")
 
-            # Cancel any pending tasks
-            for task in pending:
-                task.cancel()
-
+            raise TimeoutError("Timeout occurred while waiting for notification or user input")
         finally:
             # Make sure all tasks are cancelled
             for task in [notification_task, user_input_task]:

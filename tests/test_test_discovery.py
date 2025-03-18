@@ -4,7 +4,7 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
-import pytest
+import pytest  # type: ignore
 
 from test_a_ble.ble_manager import BLEManager
 from test_a_ble.test_runner import TestRunner
