@@ -3,7 +3,7 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
+import pytest  # type: ignore
 
 # Note: We import classes with names starting with "Test" (like TestContext, TestStatus, etc.)
 # which pytest would normally try to collect as test classes. To prevent this, we've configured

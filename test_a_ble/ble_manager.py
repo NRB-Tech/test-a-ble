@@ -8,7 +8,7 @@ import asyncio
 import logging
 import sys
 import uuid
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Union
 
 from bleak import BleakClient, BleakScanner
 from bleak.backends.device import BLEDevice
@@ -21,18 +21,21 @@ def retrieveConnectedPeripheralsWithServices(
     scanner: BleakScanner, services: Union[List[str], List[uuid.UUID]]
 ) -> list[BLEDevice]:
     """Retrieve connected peripherals with specified services."""
-    devices = []
+    devices: list[BLEDevice] = []
     if sys.platform == "darwin":
-        from CoreBluetooth import CBUUID
-        from Foundation import NSArray
+        from CoreBluetooth import CBUUID  # type: ignore
+        from Foundation import NSArray  # type: ignore
 
-        for p in scanner._backend._manager.central_manager.retrieveConnectedPeripheralsWithServices_(
+        for p in scanner._backend._manager.central_manager.retrieveConnectedPeripheralsWithServices_(  # type: ignore
             NSArray.alloc().initWithArray_(list(map(CBUUID.UUIDWithString_, services)))
         ):
-            if scanner._backend._use_bdaddr:
+            if scanner._backend._use_bdaddr:  # type: ignore
                 # HACK: retrieveAddressForPeripheral_ is undocumented but seems to do the
                 # trick
-                address_bytes: bytes = scanner._backend._manager.central_manager.retrieveAddressForPeripheral_(p)
+                # fmt: off
+                address_bytes: bytes = \
+                      scanner._backend._manager.central_manager.retrieveAddressForPeripheral_(p)  # type: ignore
+                # fmt: on
                 address = address_bytes.hex(":").upper()
             else:
                 address = p.identifier().UUIDString()
@@ -40,15 +43,15 @@ def retrieveConnectedPeripheralsWithServices(
             device = scanner._backend.create_or_update_device(
                 address,
                 p.name(),
-                (p, scanner._backend._manager.central_manager.delegate()),
+                (p, scanner._backend._manager.central_manager.delegate()),  # type: ignore
                 AdvertisementData(
                     local_name=p.name(),
-                    manufacturer_data=None,
-                    service_data=None,
-                    service_uuids=None,
+                    manufacturer_data={},
+                    service_data={},
+                    service_uuids=[],
                     tx_power=None,
-                    rssi=None,
-                    platform_data=None,
+                    rssi=0,
+                    platform_data=(),
                 ),
             )
             devices.append(device)
@@ -60,7 +63,7 @@ class BLEManager:
     """Manages BLE device discovery, connection, and communication."""
 
     # Class variable to store services that the framework should look for when finding connected devices
-    _expected_service_uuids = set()
+    _expected_service_uuids: Set[str] = set()
 
     @classmethod
     def register_expected_services(cls, service_uuids):
@@ -82,7 +85,7 @@ class BLEManager:
 
         logger.debug(f"Registered expected service UUIDs: {cls._expected_service_uuids}")
 
-    def __init__(self):
+    def __init__(self: "BLEManager"):
         """Initialize the BLEManager."""
         self.device: Optional[BLEDevice] = None
         self.client: Optional[BleakClient] = None
@@ -92,7 +95,7 @@ class BLEManager:
         self.notification_callbacks: Dict[str, List[Callable]] = {}
         self.connected = False
         self.advertisement_data_map: Dict[str, AdvertisementData] = {}  # Map device addresses to advertisement data
-        self.active_subscriptions: Dict[str, Callable] = {}  # Added for active subscriptions
+        self.active_subscriptions: list[str] = []
 
     async def discover_devices(
         self,
@@ -136,7 +139,7 @@ class BLEManager:
         # Perform scan
         scanner = BleakScanner(detection_callback=_device_found)
 
-        devices = retrieveConnectedPeripheralsWithServices(scanner, self._expected_service_uuids)
+        devices = retrieveConnectedPeripheralsWithServices(scanner, list(self._expected_service_uuids))
         self.discovered_devices.extend(devices)
 
         if devices:
@@ -255,10 +258,9 @@ class BLEManager:
             return
 
         # First, clean up all active subscriptions
-        subscription_uuids = list(self.active_subscriptions.keys())
-        if subscription_uuids:
-            logger.debug(f"Cleaning up {len(subscription_uuids)} active subscriptions")
-            for sub_uuid in subscription_uuids:
+        if self.active_subscriptions:
+            logger.debug(f"Cleaning up {len(self.active_subscriptions)} active subscriptions")
+            for sub_uuid in self.active_subscriptions:
                 try:
                     logger.debug(f"Unsubscribing from {sub_uuid}")
                     await self.unsubscribe_from_characteristic(sub_uuid)
@@ -298,7 +300,7 @@ class BLEManager:
         Returns:
             Dictionary of services and their characteristics
         """
-        if not self.client or not self.client.is_connected:
+        if not self.client or not self.client.is_connected or not self.device:
             logger.error("Not connected to any device")
             return {}
 
@@ -371,7 +373,7 @@ class BLEManager:
             data: Data to write
             response: Whether to wait for response
         """
-        if not self.client or not self.client.is_connected:
+        if not self.client or not self.client.is_connected or not self.device:
             raise RuntimeError("Not connected to any device")
 
         logger.debug(f"Writing to characteristic {characteristic_uuid}: {data.hex()}")
@@ -481,7 +483,7 @@ class BLEManager:
             try:
                 await self.client.start_notify(characteristic_uuid, self._notification_handler(characteristic_uuid))
                 # Track the active subscription
-                self.active_subscriptions[characteristic_uuid] = True
+                self.active_subscriptions.append(characteristic_uuid)
                 logger.debug(f"Subscribed to notifications from {characteristic_uuid}")
             except Exception as e:
                 logger.error(f"Failed to subscribe to {characteristic_uuid}: {e}")
@@ -501,7 +503,7 @@ class BLEManager:
             characteristic_uuid: UUID of the characteristic to unsubscribe from
         """
         # Handle case where we're not connected anymore
-        if not self.client or not self.client.is_connected:
+        if not self.client or not self.client.is_connected or not self.device:
             logger.debug(f"Not connected when unsubscribing from {characteristic_uuid}")
             # Clean up local tracking
             if characteristic_uuid in self.notification_callbacks:
@@ -509,7 +511,7 @@ class BLEManager:
                 del self.notification_callbacks[characteristic_uuid]
             if characteristic_uuid in self.active_subscriptions:
                 logger.debug(f"Removing from active subscriptions: {characteristic_uuid} (not connected)")
-                del self.active_subscriptions[characteristic_uuid]
+                self.active_subscriptions.remove(characteristic_uuid)
             return
 
         # Otherwise handle normally with the connected client
@@ -523,7 +525,7 @@ class BLEManager:
                     logger.error(f"Error stopping notifications for {characteristic_uuid}: {e}")
                 finally:
                     # Remove from active subscriptions even if there was an error
-                    del self.active_subscriptions[characteristic_uuid]
+                    self.active_subscriptions.remove(characteristic_uuid)
             else:
                 logger.debug(f"No active subscription for {characteristic_uuid}")
 
@@ -539,7 +541,7 @@ class BLEManager:
             logger.error(f"Error during unsubscribe from {characteristic_uuid}: {e}")
             # Still clean up local state even if there was an error
             if characteristic_uuid in self.active_subscriptions:
-                del self.active_subscriptions[characteristic_uuid]
+                self.active_subscriptions.remove(characteristic_uuid)
             if characteristic_uuid in self.notification_callbacks:
                 del self.notification_callbacks[characteristic_uuid]
 

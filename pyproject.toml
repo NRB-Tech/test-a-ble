@@ -1,6 +1,77 @@
 [build-system]
-requires = ["setuptools>=42", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "test-a-ble"
+version = "0.1.0"
+description = "Framework for testing BLE IoT devices"
+authors = [
+    {name = "Nick Brook", email = "nick@nrbtech.io"}
+]
+readme = "README.md"
+requires-python = ">=3.12"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Testing",
+    "Topic :: System :: Hardware",
+]
+keywords = ["bluetooth", "ble", "iot", "testing", "automation"]
+dependencies = [
+    "bleak>=0.22.3",
+    "rich>=13.9.4",
+    "packaging",
+    "prompt_toolkit>=3.0.0",
+]
+
+[project.scripts]
+test-a-ble = "test_a_ble.cli:main"
+
+[dependency-groups]
+test = [
+    "pytest>=8.3.5",
+    "pytest-cov>=6.0.0",
+    "pytest-asyncio>=0.22.0",
+    "tox>=4.24.2",
+    "tox-uv>=1.25.0",
+]
+lint = [
+    "black>=25.1.0",
+    "isort>=6.0.1",
+    "flake8>=7.1.2",
+    "flake8-docstrings>=1.7.0",
+    "flake8-pyproject>=1.2.3",
+]
+type = [
+    "mypy>=1.15.0",
+]
+check = [
+    {include-group = "test"},
+    {include-group = "lint"},
+    {include-group = "type"},
+]
+security = [
+    "bandit>=1.8.3",
+    "safety>=3.3.1",
+]
+docs = [
+    "sphinx>=8.2.3",
+    "sphinx-rtd-theme>=3.0.2",
+    "myst-parser>=4.0.1",
+]
+dev = [
+    "pre-commit>=4.1.0",
+    {include-group = "check"},
+    {include-group = "security"},
+    {include-group = "docs"},
+]
+
+# Formatting and linting
 
 [tool.black]
 line-length = 120
@@ -16,7 +87,10 @@ exclude = [
     # No need to traverse our git directory
     ".git",
     # There's no value in checking cache directories
-    "__pycache__"
+    "__pycache__",
+    "*.pyc",
+    ".venv",
+    ".tox",
 ]
 # Use extend-ignore to add to already ignored checks which are anti-patterns like W503.
 extend-ignore = [
@@ -30,6 +104,9 @@ extend-ignore = [
     "D202"
 ]
 
+[tool.mypy]
+files = ["test_a_ble", "docs", "tests"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
@@ -40,42 +117,44 @@ python_classes = "Test[A-Z][a-zA-Z0-9]*(?<!Context|Status|Exception|Failure|Skip
 norecursedirs = ["examples","test_discovery_test_package"]
 
 [tool.bandit]
-exclude_dirs = [".tox"]
+exclude_dirs = [".tox", ".venv"]
 skips = ["B101", "B404", "B607"]
+
+# Tox
 
 [tool.tox]
 min_version = "4.0"
-env_list = ["py312", "py313"]
+env_list = ["py312", "py313", "lint", "type"]
 isolated_build = true
 skip_missing_interpreters = false
-requires = ["virtualenv>=20.0.0"]
 
-[tool.tox.env.default]
-deps = [".[lint,test]"]
-commands = [
-    "black --check .",
-    "isort --check .",
-    "flake8 .",
-    "pytest {posargs:tests}",
-]
+[tool.tox.env_run_base]
+runner = "uv-venv-lock-runner"
+description = "Run test under {base_python}"
+dependency_groups = ["test"]
+commands = [["pytest"]]
 
 [tool.tox.env.lint]
-deps = [".[lint]"]
+runner = "uv-venv-lock-runner"
+description = "format code"
+dependency_groups = ["lint"]
 commands = [
-    "black --check .",
-    "isort --check .",
-    "flake8 .",
+    ["black", "--check", "."],
+    ["isort", "--check", "."],
+    ["flake8", "."],
 ]
 
 [tool.tox.env.format]
-deps = [".[lint]"]
+runner = "uv-venv-lock-runner"
+description = "format code"
+dependency_groups = ["lint"]
 commands = [
-    "black .",
-    "isort .",
+    ["black", "."],
+    ["isort", "."],
 ]
 
-[tool.tox.env.py312]
-base_python = ["python3.12"]
-
-[tool.tox.env.py313]
-base_python = ["python3.13"]
+[tool.tox.env.type]
+runner = "uv-venv-lock-runner"
+description = "type check code"
+dependency_groups = ["type"]
+commands = [["mypy"]]

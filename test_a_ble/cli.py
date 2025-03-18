@@ -48,7 +48,7 @@ async def dynamic_device_selection(ble_manager: BLEManager, timeout: float = 10.
     )
 
     # Keep track of discovered devices in order of discovery
-    discovered_devices = []
+    discovered_devices: list[bleak.BLEDevice] = []
 
     # Event to signal when scanning should stop
     stop_event = asyncio.Event()
