@@ -1,5 +1,4 @@
-"""
-BLE Manager.
+"""BLE Manager.
 
 Manages BLE device discovery, connection, and communication.
 """
@@ -8,7 +7,8 @@ import asyncio
 import logging
 import sys
 import uuid
-from typing import Any, Callable, Dict, List, Optional, Set, Union
+from collections.abc import Callable
+from typing import Any
 
 from bleak import BleakClient, BleakScanner
 from bleak.backends.device import BLEDevice
@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 
 
 def retrieveConnectedPeripheralsWithServices(
-    scanner: BleakScanner, services: Union[List[str], List[uuid.UUID]]
+    scanner: BleakScanner,
+    services: list[str] | list[uuid.UUID],
 ) -> list[BLEDevice]:
     """Retrieve connected peripherals with specified services."""
     devices: list[BLEDevice] = []
@@ -27,7 +28,7 @@ def retrieveConnectedPeripheralsWithServices(
         from Foundation import NSArray  # type: ignore
 
         for p in scanner._backend._manager.central_manager.retrieveConnectedPeripheralsWithServices_(  # type: ignore
-            NSArray.alloc().initWithArray_(list(map(CBUUID.UUIDWithString_, services)))
+            NSArray.alloc().initWithArray_(list(map(CBUUID.UUIDWithString_, services))),
         ):
             if scanner._backend._use_bdaddr:  # type: ignore
                 # HACK: retrieveAddressForPeripheral_ is undocumented but seems to do the
@@ -63,12 +64,11 @@ class BLEManager:
     """Manages BLE device discovery, connection, and communication."""
 
     # Class variable to store services that the framework should look for when finding connected devices
-    _expected_service_uuids: Set[str] = set()
+    _expected_service_uuids: set[str] = set()
 
     @classmethod
     def register_expected_services(cls, service_uuids):
-        """
-        Register service UUIDs that should be used when looking for connected devices.
+        """Register service UUIDs that should be used when looking for connected devices.
 
         Args:
             service_uuids: List or set of service UUID strings in standard format
@@ -87,24 +87,23 @@ class BLEManager:
 
     def __init__(self: "BLEManager"):
         """Initialize the BLEManager."""
-        self.device: Optional[BLEDevice] = None
-        self.client: Optional[BleakClient] = None
-        self.discovered_devices: List[BLEDevice] = []
-        self.services: Dict[str, Any] = {}
-        self.characteristics: Dict[str, Any] = {}
-        self.notification_callbacks: Dict[str, List[Callable]] = {}
+        self.device: BLEDevice | None = None
+        self.client: BleakClient | None = None
+        self.discovered_devices: list[BLEDevice] = []
+        self.services: dict[str, Any] = {}
+        self.characteristics: dict[str, Any] = {}
+        self.notification_callbacks: dict[str, list[Callable]] = {}
         self.connected = False
-        self.advertisement_data_map: Dict[str, AdvertisementData] = {}  # Map device addresses to advertisement data
+        self.advertisement_data_map: dict[str, AdvertisementData] = {}  # Map device addresses to advertisement data
         self.active_subscriptions: list[str] = []
 
     async def discover_devices(
         self,
         timeout: float = 5.0,
-        name_filter: Optional[str] = None,
-        address_filter: Optional[str] = None,
-    ) -> List[BLEDevice]:
-        """
-        Scan for BLE devices and return filtered results.
+        name_filter: str | None = None,
+        address_filter: str | None = None,
+    ) -> list[BLEDevice]:
+        """Scan for BLE devices and return filtered results.
 
         Args:
             timeout: Scan duration in seconds
@@ -145,7 +144,7 @@ class BLEManager:
         if devices:
             logger.debug(
                 f"Found {len(devices)} connected devices with services "
-                f"{self._expected_service_uuids}, not scanning for more devices"
+                f"{self._expected_service_uuids}, not scanning for more devices",
             )
         else:
             await scanner.start()
@@ -165,12 +164,11 @@ class BLEManager:
 
     async def connect_to_device(
         self,
-        device_or_address: Union[BLEDevice, str],
+        device_or_address: BLEDevice | str,
         retry_count: int = 3,
         retry_delay: float = 1.0,
     ) -> bool:
-        """
-        Connect to a BLE device.
+        """Connect to a BLE device.
 
         Args:
             device_or_address: BLEDevice or device address to connect to
@@ -207,7 +205,7 @@ class BLEManager:
                         # For modern Bleak (0.19.0+), create a device with required parameters
                         self.device = BLEDevice(address=device_or_address, name=None, details={}, rssi=0)
                     except Exception as e:
-                        logger.error(f"Failed to create BLEDevice: {str(e)}")
+                        logger.error(f"Failed to create BLEDevice: {e!s}")
                         logger.debug("Attempting to discover the device first...")
 
                         # Try to discover the device first
@@ -241,7 +239,7 @@ class BLEManager:
                 return True
 
             except Exception as e:
-                logger.warning(f"Connection attempt {attempt + 1} failed: {str(e)}")
+                logger.warning(f"Connection attempt {attempt + 1} failed: {e!s}")
                 if attempt < retry_count - 1:
                     await asyncio.sleep(retry_delay)
 
@@ -290,9 +288,8 @@ class BLEManager:
 
             logger.debug("Disconnect cleanup completed")
 
-    async def discover_services(self, cache: bool = True) -> Dict[str, Any]:
-        """
-        Discover services and characteristics of the connected device.
+    async def discover_services(self, cache: bool = True) -> dict[str, Any]:
+        """Discover services and characteristics of the connected device.
 
         Args:
             cache: Whether to cache results for future use
@@ -342,8 +339,7 @@ class BLEManager:
         return services
 
     async def read_characteristic(self, characteristic_uuid: str) -> bytearray:
-        """
-        Read value from a characteristic.
+        """Read value from a characteristic.
 
         Args:
             characteristic_uuid: UUID of the characteristic to read
@@ -362,11 +358,10 @@ class BLEManager:
     async def write_characteristic(
         self,
         characteristic_uuid: str,
-        data: Union[bytes, bytearray, memoryview],
+        data: bytes | bytearray | memoryview,
         response: bool = True,
     ) -> None:
-        """
-        Write value to a characteristic.
+        """Write value to a characteristic.
 
         Args:
             characteristic_uuid: UUID of the characteristic to write to
@@ -395,7 +390,7 @@ class BLEManager:
 
             logger.debug(f"Characteristic {characteristic_uuid} is readable: {is_readable}")
         except Exception as e:
-            logger.debug(f"Error checking if characteristic is readable: {str(e)}")
+            logger.debug(f"Error checking if characteristic is readable: {e!s}")
             is_readable = False
 
         try:
@@ -405,7 +400,7 @@ class BLEManager:
                     current_value = await self.client.read_gatt_char(characteristic_uuid)
                     logger.debug(f"Current value before write: {current_value.hex()}")
                 except Exception as e:
-                    logger.debug(f"Could not read characteristic before write despite being readable: {str(e)}")
+                    logger.debug(f"Could not read characteristic before write despite being readable: {e!s}")
             else:
                 logger.debug("Skipping pre-write read - characteristic not readable")
 
@@ -428,21 +423,20 @@ class BLEManager:
                     else:
                         logger.warning(f"Write verification failed. Expected: {data.hex()}, Got: {new_value.hex()}")
                 except Exception as e:
-                    logger.debug(f"Could not verify write: {str(e)}")
+                    logger.debug(f"Could not verify write: {e!s}")
             elif not is_readable:
                 logger.debug("Skipping write verification - characteristic not readable")
 
             logger.debug("Write operation completed")
         except Exception as e:
-            logger.error(f"Error writing to characteristic {characteristic_uuid}: {str(e)}")
+            logger.error(f"Error writing to characteristic {characteristic_uuid}: {e!s}")
             raise
 
     def _notification_handler(self, characteristic_uuid: str):
         """Create a notification handler for a specific characteristic."""
 
         def _handle_notification(sender, data: bytearray):
-            """
-            Handle BLE notifications in latest Bleak versions.
+            """Handle BLE notifications in latest Bleak versions.
 
             The sender parameter can be of different types in different Bleak versions.
             """
@@ -455,7 +449,7 @@ class BLEManager:
                         try:
                             callback(data)
                         except Exception as e:
-                            logger.error(f"Error in notification callback: {str(e)}")
+                            logger.error(f"Error in notification callback: {e!s}")
             # If we get a non-data value (like an error string), log it but don't invoke callbacks
             elif data is not None:
                 # Log but at debug level to avoid cluttering logs
@@ -464,10 +458,11 @@ class BLEManager:
         return _handle_notification
 
     async def subscribe_to_characteristic(
-        self, characteristic_uuid: str, callback: Callable[[bytearray], None]
+        self,
+        characteristic_uuid: str,
+        callback: Callable[[bytearray], None],
     ) -> None:
-        """
-        Subscribe to notifications from a characteristic.
+        """Subscribe to notifications from a characteristic.
 
         Args:
             characteristic_uuid: UUID of the characteristic to subscribe to
@@ -492,12 +487,11 @@ class BLEManager:
         self.notification_callbacks[characteristic_uuid].append(callback)
         logger.debug(
             f"Added callback for {characteristic_uuid}, total callbacks: "
-            f"{len(self.notification_callbacks[characteristic_uuid])}"
+            f"{len(self.notification_callbacks[characteristic_uuid])}",
         )
 
     async def unsubscribe_from_characteristic(self, characteristic_uuid: str) -> None:
-        """
-        Unsubscribe from notifications from a characteristic.
+        """Unsubscribe from notifications from a characteristic.
 
         Args:
             characteristic_uuid: UUID of the characteristic to unsubscribe from
@@ -533,7 +527,7 @@ class BLEManager:
             if characteristic_uuid in self.notification_callbacks:
                 logger.debug(
                     f"Clearing {len(self.notification_callbacks[characteristic_uuid])} callbacks for "
-                    f"{characteristic_uuid}"
+                    f"{characteristic_uuid}",
                 )
                 del self.notification_callbacks[characteristic_uuid]
 
@@ -545,7 +539,7 @@ class BLEManager:
             if characteristic_uuid in self.notification_callbacks:
                 del self.notification_callbacks[characteristic_uuid]
 
-    def get_discovered_device_info(self) -> List[Dict[str, Any]]:
+    def get_discovered_device_info(self) -> list[dict[str, Any]]:
         """Return information about discovered devices in a structured format."""
         result = []
         for device in self.discovered_devices:
@@ -558,6 +552,6 @@ class BLEManager:
                     "name": device.name or "Unknown",
                     "address": device.address,
                     "rssi": rssi,
-                }
+                },
             )
         return result

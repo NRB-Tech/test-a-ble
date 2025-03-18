@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Script to bump the version of the package.
+"""Script to bump the version of the package.
 
 Usage: python scripts/bump_version.py [major|minor|patch]
 """
@@ -16,7 +15,7 @@ from datetime import datetime
 def update_setup_py(new_version):
     """Update the version in setup.py."""
     setup_py_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "setup.py")
-    with open(setup_py_path, "r") as f:
+    with open(setup_py_path) as f:
         content = f.read()
 
     # Replace the version
@@ -31,7 +30,7 @@ def update_setup_py(new_version):
 def update_init_py(new_version):
     """Update the version in __init__.py."""
     init_py_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "test-a-ble", "__init__.py")
-    with open(init_py_path, "r") as f:
+    with open(init_py_path) as f:
         content = f.read()
 
     # Replace the version
@@ -50,7 +49,7 @@ def update_init_py(new_version):
 def update_docs_conf_py(new_version):
     """Update the version in docs/source/conf.py."""
     conf_py_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs", "source", "conf.py")
-    with open(conf_py_path, "r") as f:
+    with open(conf_py_path) as f:
         content = f.read()
 
     # Replace the version
@@ -65,7 +64,7 @@ def update_docs_conf_py(new_version):
 def update_changelog(new_version):
     """Update the changelog with a new version section."""
     changelog_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "CHANGELOG.md")
-    with open(changelog_path, "r") as f:
+    with open(changelog_path) as f:
         content = f.read()
 
     # Check if the new version already exists in the changelog
@@ -107,16 +106,15 @@ def update_changelog(new_version):
 def get_current_version():
     """Get the current version from setup.py."""
     setup_py_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "setup.py")
-    with open(setup_py_path, "r") as f:
+    with open(setup_py_path) as f:
         content = f.read()
 
     # Extract the version
     match = re.search(r'version="([0-9]+\.[0-9]+\.[0-9]+)"', content)
     if match:
         return match.group(1)
-    else:
-        print("Could not find version in setup.py")
-        sys.exit(1)
+    print("Could not find version in setup.py")
+    sys.exit(1)
 
 
 def bump_version(current_version, part):
@@ -175,12 +173,8 @@ def main():
     if response == "y" or response == "yes":
         print("Running git commands...")
         if args.part:
-            subprocess.run(
-                ["git", "commit", "-am", f"Bump version to {new_version}"], check=True, shell=False
-            )  # nosec B603
-        subprocess.run(
-            ["git", "tag", "-a", f"v{new_version}", "-m", f"Version {new_version}"], check=True, shell=False
-        )  # nosec B603
+            subprocess.run(["git", "commit", "-am", f"Bump version to {new_version}"], check=True, shell=False)  # nosec B603
+        subprocess.run(["git", "tag", "-a", f"v{new_version}", "-m", f"Version {new_version}"], check=True, shell=False)  # nosec B603
 
         print("Do you want to push the changes? (y/n)")
         push_response = input().strip().lower()

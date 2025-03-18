@@ -1,5 +1,4 @@
-"""
-Nordic Blinky Tests.
+"""Nordic Blinky Tests.
 
 Tests for the Nordic Semiconductor BLE Blinky sample application.
 These tests demonstrate controlling the LED and receiving button state notifications.
@@ -22,8 +21,7 @@ from test_a_ble.test_context import TestContext, TestFailure, ble_test, ble_test
 
 @ble_test_class("Blinky Tests")
 class BlinkyTests:
-    """
-    Tests for the Nordic Semiconductor BLE Blinky sample application.
+    """Tests for the Nordic Semiconductor BLE Blinky sample application.
 
     These tests demonstrate controlling the LED and receiving button state notifications.
     """
@@ -117,7 +115,9 @@ class BlinkyTests:
             ["Please PRESS the button on the device to demonstrate BLE notifications."],
         )
         press_result = await test_context.wait_for_notification_interactive(
-            characteristic_uuid=CHAR_BUTTON, expected_value=BUTTON_PRESSED, timeout=15.0
+            characteristic_uuid=CHAR_BUTTON,
+            expected_value=BUTTON_PRESSED,
+            timeout=15.0,
         )
 
         # Button press detected
@@ -163,10 +163,12 @@ class BlinkyTests:
         test_context.debug("Waiting for button press to turn on LED")
         test_context.print_formatted_box(
             "WAITING FOR NOTIFICATION",
-            ["Press and HOLD the button on the device.\n" "The LED should remain OFF until you press the button."],
+            ["Press and HOLD the button on the device.\nThe LED should remain OFF until you press the button."],
         )
         press_result = await test_context.wait_for_notification_interactive(
-            characteristic_uuid=CHAR_BUTTON, expected_value=BUTTON_PRESSED, timeout=15.0
+            characteristic_uuid=CHAR_BUTTON,
+            expected_value=BUTTON_PRESSED,
+            timeout=15.0,
         )
 
         # If we get here, button press was successful
@@ -196,7 +198,7 @@ class BlinkyTests:
         test_context.debug("Waiting for button release to turn off LED")
         test_context.print_formatted_box(
             "WAITING FOR NOTIFICATION",
-            ["RELEASE the button now.\n" "When you release the button, the LED should turn OFF."],
+            ["RELEASE the button now.\nWhen you release the button, the LED should turn OFF."],
         )
         await test_context.wait_for_notification_interactive(
             characteristic_uuid=CHAR_BUTTON,

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-Verification script for BLE test framework fixes.
+"""Verification script for BLE test framework fixes.
 
 This script validates the fixes made to the notification handling,
 LED control, and user prompts in the BLE test framework.
@@ -8,6 +7,7 @@ LED control, and user prompts in the BLE test framework.
 Usage:
     python verify_fixes.py [--address=<device_address>]
 """
+
 import argparse
 import asyncio
 import logging
@@ -45,7 +45,7 @@ async def verify_led_control(ble_manager, test_context):
         else:
             test_context.log(f"LED state mismatch - expected {LED_ON.hex()}, got {led_state.hex()}")
     except Exception as e:
-        logger.info(f"Could not read LED state: {str(e)}")
+        logger.info(f"Could not read LED state: {e!s}")
 
     # Ask user to verify
     response = test_context.prompt_user("Is the LED ON? (y/n)")
@@ -67,7 +67,7 @@ async def verify_led_control(ble_manager, test_context):
         else:
             test_context.log(f"LED state mismatch - expected {LED_OFF.hex()}, got {led_state.hex()}")
     except Exception as e:
-        logger.info(f"Could not read LED state: {str(e)}")
+        logger.info(f"Could not read LED state: {e!s}")
 
     # Ask user to verify
     response = test_context.prompt_user("Is the LED OFF? (y/n)")
@@ -102,7 +102,7 @@ async def verify_notification_handling(ble_manager, test_context):
 
     except Exception as e:
         # Only catch to ensure we end the test properly
-        test_context.log(f"Notification handling: {str(e)}")
+        test_context.log(f"Notification handling: {e!s}")
 
     return test_context.end_test("pass", "Notification handling verification complete")
 
@@ -134,7 +134,7 @@ async def main():
 
         logger.info(f"Found {len(devices)} devices:")
         for i, device in enumerate(devices):
-            logger.info(f"{i+1}: {device.name or 'Unknown'} ({device.address})")
+            logger.info(f"{i + 1}: {device.name or 'Unknown'} ({device.address})")
 
         device_idx = int(input("Enter device number to connect to: ")) - 1
         if 0 <= device_idx < len(devices):

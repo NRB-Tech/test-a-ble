@@ -1,5 +1,4 @@
-"""
-BLE IoT Device Testing Framework.
+"""BLE IoT Device Testing Framework.
 
 A modular, extensible framework for testing Bluetooth Low Energy IoT devices.
 """
@@ -11,9 +10,8 @@ from typing import Optional
 __version__ = "0.1.0"
 
 
-def setup_logging(verbose: bool = False, log_file: Optional[str] = None):
-    """
-    Configure logging for the BLE test framework.
+def setup_logging(verbose: bool = False, log_file: str | None = None):
+    """Configure logging for the BLE test framework.
 
     Args:
         verbose: If True, set log level to DEBUG, otherwise WARNING to hide

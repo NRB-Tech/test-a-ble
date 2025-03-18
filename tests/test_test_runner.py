@@ -54,7 +54,11 @@ def test_is_package(test_runner, tmp_path):
 @patch("importlib.util.module_from_spec")
 @patch("os.path.exists")
 def test_import_package_with_base_package(
-    mock_exists, mock_module_from_spec, mock_spec_from_file, test_runner, tmp_path
+    mock_exists,
+    mock_module_from_spec,
+    mock_spec_from_file,
+    test_runner,
+    tmp_path,
 ):
     """Test the _import_package method with a base package."""
     # Setup
@@ -89,7 +93,11 @@ def test_import_package_with_base_package(
 @patch("importlib.util.module_from_spec")
 @patch("os.path.exists")
 def test_import_package_without_base_package(
-    mock_exists, mock_module_from_spec, mock_spec_from_file, test_runner, tmp_path
+    mock_exists,
+    mock_module_from_spec,
+    mock_spec_from_file,
+    test_runner,
+    tmp_path,
 ):
     """Test the _import_package method without a base package."""
     # Setup
@@ -152,7 +160,7 @@ def test_find_and_import_nearest_package_when_no_package_found(mock_exists, mock
     mock_isdir.return_value = True
 
     # Configure mock to indicate no package is found
-    mock_exists.side_effect = lambda path: False
+    mock_exists.side_effect = lambda _path: False
 
     # Test when no package is found
     result = test_runner._find_and_import_nearest_package(str(tmp_path / "path" / "to" / "nowhere"))

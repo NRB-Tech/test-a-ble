@@ -235,10 +235,10 @@ async def test_write_characteristic():
                             "properties": ["write"],
                             "description": "Heart Rate Control Point",
                             "handle": 43,
-                        }
+                        },
                     },
-                }
-            }
+                },
+            },
         }
         mock_discover.return_value = mock_services
         manager.services = mock_services
@@ -399,7 +399,7 @@ async def test_register_expected_services():
 
     # Register multiple services
     BLEManager.register_expected_services(
-        ["0000180a-0000-1000-8000-00805f9b34fb", "00001810-0000-1000-8000-00805f9b34fb"]
+        ["0000180a-0000-1000-8000-00805f9b34fb", "00001810-0000-1000-8000-00805f9b34fb"],
     )
     assert "0000180a-0000-1000-8000-00805f9b34fb" in BLEManager._expected_service_uuids
     assert "00001810-0000-1000-8000-00805f9b34fb" in BLEManager._expected_service_uuids

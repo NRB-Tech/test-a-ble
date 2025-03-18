@@ -1,5 +1,4 @@
-"""
-Test Runner.
+"""Test Runner.
 
 Discovers and executes BLE tests
 """
@@ -14,7 +13,8 @@ import os
 import re
 import sys
 import traceback
-from typing import Any, Callable, Coroutine, Dict, List, Optional, Tuple, Union
+from collections.abc import Callable, Coroutine
+from typing import Any, Union
 
 from .ble_manager import BLEManager
 from .test_context import TestContext, TestException, TestFailure, TestSkip, TestStatus
@@ -25,9 +25,9 @@ logger = logging.getLogger(__name__)
 TestFunction = Callable[[BLEManager, TestContext], Coroutine[Any, Any, None]]
 
 # Type for test item: a test function or (class_name, class_obj, method) tuple
-TestItem = Union[Callable, Tuple[str, Any, Callable]]
+TestItem = Union[Callable, tuple[str, Any, Callable]]
 # Type for test: (test_name, test_item)
-TestNameItem = Tuple[str, TestItem]
+TestNameItem = tuple[str, TestItem]
 
 
 class TestRunner:
@@ -39,8 +39,7 @@ class TestRunner:
         self.test_context = TestContext(ble_manager)
 
     def _is_package(self, path: str) -> bool:
-        """
-        Check if a directory is a Python package (has __init__.py file).
+        """Check if a directory is a Python package (has __init__.py file).
 
         Args:
             path: Path to check
@@ -51,8 +50,7 @@ class TestRunner:
         return os.path.isdir(path) and os.path.exists(os.path.join(path, "__init__.py"))
 
     def _import_package(self, package_path: str, base_package: str = "") -> str:
-        """
-        Import a Python package and all its parent packages.
+        """Import a Python package and all its parent packages.
 
         Args:
             package_path: Absolute path to the package
@@ -98,11 +96,10 @@ class TestRunner:
 
             return full_package_name
         except Exception as e:
-            raise ImportError(f"Error importing package {full_package_name}: {str(e)}") from e
+            raise ImportError(f"Error importing package {full_package_name}: {e!s}") from e
 
-    def _find_and_import_nearest_package(self, path: str) -> Optional[Tuple[str, str]]:
-        """
-        Find the nearest package in the given path and import it.
+    def _find_and_import_nearest_package(self, path: str) -> tuple[str, str] | None:
+        """Find the nearest package in the given path and import it.
 
         Args:
             path: Path to search for a package
@@ -125,7 +122,7 @@ class TestRunner:
                     self._import_package(current_dir)
                     return package_name, package_dir
                 except ImportError as e:
-                    logger.error(f"Error importing package {current_dir}: {str(e)}")
+                    logger.error(f"Error importing package {current_dir}: {e!s}")
                     raise
 
             # Move up to the parent directory
@@ -138,9 +135,8 @@ class TestRunner:
 
         return None
 
-    def _discover_tests_from_specifier(self, test_specifier: str) -> List[Tuple[str, List[TestNameItem]]]:
-        """
-        Parse a test specifier.
+    def _discover_tests_from_specifier(self, test_specifier: str) -> list[tuple[str, list[TestNameItem]]]:
+        """Parse a test specifier.
 
         Args:
             test_specifier: Test specifier
@@ -150,9 +146,8 @@ class TestRunner:
             test_item is a test function or (class, method) tuple
         """
 
-        def check_if_file_exists(test_dir: str, test_file: str) -> Optional[Tuple[str, str]]:
-            """
-            Check if a file exists in the given directory.
+        def check_if_file_exists(test_dir: str, test_file: str) -> tuple[str, str] | None:
+            """Check if a file exists in the given directory.
 
             Returns:
                 Tuple of (test_dir, test_file) if the file exists, None otherwise
@@ -169,9 +164,8 @@ class TestRunner:
                 return (os.path.join(test_dir, "tests"), test_file)
             return None
 
-        def check_wildcard_match(test_wildcard: Optional[str], test_string: str) -> bool:
-            """
-            Check if the test string matches the test wildcard.
+        def check_wildcard_match(test_wildcard: str | None, test_string: str) -> bool:
+            """Check if the test string matches the test wildcard.
 
             Args:
                 test_wildcard: Wildcard to match against
@@ -182,9 +176,8 @@ class TestRunner:
             """
             return test_wildcard is None or fnmatch.fnmatch(test_string, test_wildcard)
 
-        def find_files_matching_wildcard(test_dir: str, test_file_wildcard: Optional[str] = None) -> List[str]:
-            """
-            Find files matching the wildcard (or any file if test_file_wildcard is None) in the given directory.
+        def find_files_matching_wildcard(test_dir: str, test_file_wildcard: str | None = None) -> list[str]:
+            """Find files matching the wildcard (or any file if test_file_wildcard is None) in the given directory.
 
             Args:
                 test_dir: Directory to search in
@@ -203,14 +196,13 @@ class TestRunner:
             return files
 
         def find_tests_in_module(
-            package_dir: Optional[str],
+            package_dir: str | None,
             import_name: str,
             test_dir: str,
             test_file: str,
-            method_or_wildcard: Optional[str] = None,
-        ) -> List[TestNameItem]:
-            """
-            Find tests in the given module.
+            method_or_wildcard: str | None = None,
+        ) -> list[TestNameItem]:
+            """Find tests in the given module.
 
             Args:
                 package_dir: Directory of the package
@@ -291,13 +283,13 @@ class TestRunner:
                                             class_obj,
                                             method_obj,
                                             line_number,
-                                        )
+                                        ),
                                     )
                                     logger.debug(f"Discovered class test method: {test_name} at line {line_number}")
                                 else:
                                     logger.warning(
                                         f"Method {method_name} in class {class_full_name} is not a coroutine function, "
-                                        "skipping"
+                                        "skipping",
                                     )
 
                         # Sort class methods by line number to preserve definition order
@@ -336,7 +328,7 @@ class TestRunner:
                 # Sort standalone functions by line number
                 function_tests.sort(key=lambda x: x[2])
 
-                tests: list[Tuple[str, TestItem]] = []
+                tests: list[tuple[str, TestItem]] = []
                 # Add class tests to the order list first
                 for test_name, class_name, class_obj, method_obj, _ in class_tests:
                     tests.append((test_name, (class_name, class_obj, method_obj)))
@@ -348,24 +340,23 @@ class TestRunner:
                 return tests
 
             except ImportError as e:
-                logger.error(f"Import error loading module {import_name}: {str(e)}")
+                logger.error(f"Import error loading module {import_name}: {e!s}")
                 logger.info(f"File path: {file_path}")
                 logger.info(f"Current sys.path: {sys.path}")
 
                 raise
             except Exception as e:
-                logger.error(f"Error loading module {import_name}: {str(e)}")
+                logger.error(f"Error loading module {import_name}: {e!s}")
                 logger.debug(f"Exception details: {traceback.format_exc()}")
                 raise
 
         def find_tests_in_file(
-            package_dir: Optional[str],
+            package_dir: str | None,
             test_dir: str,
             test_file: str,
-            method_or_wildcard: Optional[str] = None,
-        ) -> List[TestNameItem]:
-            """
-            Find tests in the given file.
+            method_or_wildcard: str | None = None,
+        ) -> list[TestNameItem]:
+            """Find tests in the given file.
 
             Args:
                 package_dir: Directory of the package
@@ -408,7 +399,7 @@ class TestRunner:
                 method_or_wildcard,
             )
 
-        tests: List[Tuple[str, List[TestNameItem]]] = []
+        tests: list[tuple[str, list[TestNameItem]]] = []
         # Split the specifier by both '.' and '/' or '\' to handle different path formats
         path_parts = re.split(r"[./\\]", test_specifier)
         starts_with_slash = (
@@ -510,9 +501,8 @@ class TestRunner:
 
         return tests
 
-    def discover_tests(self, test_specifiers: List[str]) -> List[Tuple[str, List[TestNameItem]]]:
-        """
-        Discover test modules with the given specifiers.
+    def discover_tests(self, test_specifiers: list[str]) -> list[tuple[str, list[TestNameItem]]]:
+        """Discover test modules with the given specifiers.
 
         Args:
             test_specifiers: List of test specifiers
@@ -525,9 +515,8 @@ class TestRunner:
             tests.extend(self._discover_tests_from_specifier(test_specifier))
         return tests
 
-    async def run_test(self, test_name: str, test_item: TestItem) -> Dict[str, Any]:
-        """
-        Run a single test by name.
+    async def run_test(self, test_name: str, test_item: TestItem) -> dict[str, Any]:
+        """Run a single test by name.
 
         Args:
             test_name: Name of the test to run
@@ -584,7 +573,6 @@ class TestRunner:
         try:
             # If this is a class method test, call setUp if it exists
             if test_class_instance:
-
                 # Call setUp if it exists
                 if hasattr(test_class_instance, "setUp") and callable(test_class_instance.setUp):
                     if asyncio.iscoroutinefunction(test_class_instance.setUp):
@@ -606,28 +594,28 @@ class TestRunner:
             result = self.test_context.end_test(TestStatus.PASS)
 
         except TestFailure as e:
-            logger.error(f"Test {test_name} failed: {str(e)}")
+            logger.error(f"Test {test_name} failed: {e!s}")
             result = self.test_context.end_test(TestStatus.FAIL, str(e))
 
         except TestSkip as e:
-            logger.info(f"Test {test_name} skipped: {str(e)}")
+            logger.info(f"Test {test_name} skipped: {e!s}")
             result = self.test_context.end_test(TestStatus.SKIP, str(e))
 
         except TestException as e:
-            logger.error(f"Test {test_name} error: {str(e)}")
+            logger.error(f"Test {test_name} error: {e!s}")
             result = self.test_context.end_test(e.status, str(e))
 
         except AssertionError as e:
-            logger.error(f"Test {test_name} failed: {str(e)}")
+            logger.error(f"Test {test_name} failed: {e!s}")
             result = self.test_context.end_test(TestStatus.FAIL, str(e))
 
         except TimeoutError as e:
             # Handle timeout errors gracefully without showing traceback
-            logger.error(f"Test {test_name} error: {str(e)}")
+            logger.error(f"Test {test_name} error: {e!s}")
             result = self.test_context.end_test(TestStatus.ERROR, str(e))
 
         except Exception as e:
-            logger.error(f"Error running test {test_name}: {str(e)}")
+            logger.error(f"Error running test {test_name}: {e!s}")
             traceback.print_exc()
             result = self.test_context.end_test(TestStatus.ERROR, str(e))
 
@@ -643,7 +631,7 @@ class TestRunner:
                             logger.debug(f"Calling sync tearDown for {class_name}")
                             test_class_instance.tearDown(self.ble_manager, self.test_context)
                 except Exception as e:
-                    logger.error(f"Error in tearDown for {test_name}: {str(e)}")
+                    logger.error(f"Error in tearDown for {test_name}: {e!s}")
                     # Don't override test result if tearDown fails
 
             # Clean up subscriptions after test is complete
@@ -651,9 +639,8 @@ class TestRunner:
 
         return result
 
-    async def run_tests(self, tests: List[TestNameItem]) -> Dict[str, Any]:
-        """
-        Run multiple tests in the order they were defined in the source code.
+    async def run_tests(self, tests: list[TestNameItem]) -> dict[str, Any]:
+        """Run multiple tests in the order they were defined in the source code.
 
         Args:
             tests: List of tests to run
