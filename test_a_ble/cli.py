@@ -7,6 +7,7 @@ import contextlib
 import logging
 import sys
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import bleak
@@ -26,9 +27,326 @@ logger = logging.getLogger("ble_tester")
 TIME_BETWEEN_UPDATES = 3.0
 
 
+@dataclass
+class DeviceSelectionContext:
+    """Context class for device selection to share state between functions."""
+
+    ble_manager: BLEManager
+    discovered_devices: list[bleak.BLEDevice]
+    stop_event: asyncio.Event
+    ui_update_needed: asyncio.Event
+    scan_task: asyncio.Task
+    ui_task: asyncio.Task
+    timeout: float
+
+
 def get_console() -> Console:
     """Return the global console object for rich output."""
     return console
+
+
+async def _handle_device_selection(
+    device_index: int, discovered_devices: list[bleak.BLEDevice], ble_manager: BLEManager
+) -> tuple[bool, bool]:
+    """Handle selection of a device by its index.
+
+    Args:
+        device_index: Index of the selected device
+        discovered_devices: List of discovered devices
+        ble_manager: BLE Manager instance
+
+    Returns:
+        Tuple of (connected successfully, user quit)
+    """
+    if 0 <= device_index < len(discovered_devices):
+        device = discovered_devices[device_index]
+        console.print(
+            f"[bold]Connecting to {device.name or 'Unknown'} ({device.address})...[/bold]",
+        )
+        connected = await ble_manager.connect_to_device(device)
+
+        if connected:
+            console.print(f"[bold green]Successfully connected to {device.address}![/bold green]")
+            return True, False  # Connected, not user quit
+        console.print(f"[bold red]Failed to connect to {device.address}![/bold red]")
+        return False, False  # Not connected, not user quit
+
+    console.print(f"[bold red]Invalid device number: {device_index + 1}![/bold red]")
+    return False, False  # Not connected, not user quit
+
+
+async def _scan_for_devices(device_found_callback: callable, stop_event: asyncio.Event, timeout: float) -> None:
+    """Scan for BLE devices.
+
+    Args:
+        device_found_callback: Callback function for when a device is found
+        stop_event: Event to signal when to stop scanning
+        timeout: Maximum scan duration in seconds
+    """
+    # Create a new scanner each time
+    scanner = bleak.BleakScanner(detection_callback=device_found_callback)
+
+    try:
+        # Start scanning
+        await scanner.start()
+        logger.debug("Scanner started")
+
+        # Keep scanning until timeout or stop_event
+        scan_end_time = time.time() + timeout
+        while time.time() < scan_end_time and not stop_event.is_set():
+            await asyncio.sleep(0.1)
+
+        logger.debug(f"Scan finished: timeout={time.time() >= scan_end_time}, stopped={stop_event.is_set()}")
+
+    finally:
+        # Ensure scanner is stopped
+        await scanner.stop()
+        logger.debug("Scanner stopped")
+
+
+async def _update_device_table_ui(
+    discovered_devices: list[bleak.BLEDevice],
+    ble_manager: BLEManager,
+    timeout: float,
+    ui_update_needed: asyncio.Event,
+    stop_event: asyncio.Event,
+) -> None:
+    """Update the UI with the current list of discovered devices.
+
+    Args:
+        discovered_devices: List of discovered devices
+        ble_manager: BLE Manager instance
+        timeout: Maximum scan duration in seconds
+        ui_update_needed: Event to signal when UI needs updating
+        stop_event: Event to signal when to stop scanning
+    """
+    last_update_time = 0
+    last_device_count = 0
+    force_update = False
+
+    while not stop_event.is_set():
+        try:
+            # Wait for signal with timeout
+            try:
+                await asyncio.wait_for(ui_update_needed.wait(), timeout=0.5)
+                ui_update_needed.clear()
+                force_update = True  # Force update when signal is received
+            except TimeoutError:
+                # Force update every 3 seconds regardless of signal
+                if time.time() - last_update_time >= TIME_BETWEEN_UPDATES:
+                    force_update = True
+                else:
+                    continue  # No update needed
+
+            # Check if we need to update the UI
+            current_device_count = len(discovered_devices)
+
+            # Skip update if no new devices and not forced
+            if not force_update and current_device_count == last_device_count:
+                continue
+
+            # Track last update time and device count
+            last_update_time = time.time()
+            last_device_count = current_device_count
+            force_update = False  # Reset force flag
+
+            # Create and display the table
+            _display_device_table(discovered_devices, ble_manager, timeout)
+
+        except Exception:
+            logger.exception("Error updating UI")
+            await asyncio.sleep(0.5)  # Avoid tight loop on error
+
+
+def _display_device_table(discovered_devices: list[bleak.BLEDevice], ble_manager: BLEManager, timeout: float) -> None:
+    """Display a table of discovered devices.
+
+    Args:
+        discovered_devices: List of discovered devices
+        ble_manager: BLE Manager instance
+        timeout: Maximum scan duration in seconds
+    """
+    # Create new table for each update
+    table = Table(title="Discovered Devices")
+    table.add_column("#", justify="right", style="cyan")
+    table.add_column("Name", style="green")
+    table.add_column("Address", style="blue")
+    table.add_column("RSSI", justify="right")
+
+    # Add devices to table
+    for i, device in enumerate(discovered_devices):
+        adv_data = ble_manager.advertisement_data_map.get(device.address)
+        rssi = adv_data.rssi if adv_data else "N/A"
+
+        table.add_row(str(i + 1), device.name or "Unknown", device.address, str(rssi))
+
+    # Clear console and redraw
+    console.clear()
+    console.print("[bold]Scanning for BLE devices...[/bold]")
+    console.print(f"[dim]Scan will continue for up to {timeout} seconds[/dim]")
+    if discovered_devices:
+        console.print(table)
+        console.print(
+            "[bold yellow]Enter a device number to select it immediately, press Enter for options, or wait "
+            "for scan to complete[/bold yellow]",
+        )
+    else:
+        console.print("[dim]No devices found yet...[/dim]")
+        console.print(
+            "[bold yellow]Press Enter for options or wait for devices to be discovered[/bold yellow]",
+        )
+
+
+async def _show_selection_menu(
+    discovered_devices: list[bleak.BLEDevice], ble_manager: BLEManager, timeout: float
+) -> tuple[bool, bool]:
+    """Show a selection menu after scanning completes.
+
+    Args:
+        discovered_devices: List of discovered devices
+        ble_manager: BLE Manager instance
+        timeout: Maximum scan duration in seconds
+
+    Returns:
+        Tuple of (connected successfully, user quit)
+    """
+    if not discovered_devices:
+        console.print("[bold red]No devices found![/bold red]")
+        rescan = console.input("[bold yellow]Press 'r' to rescan or any other key to quit: [/bold yellow]")
+        if rescan.lower() == "r":
+            # Clear previous state before rescanning
+            discovered_devices.clear()
+            ble_manager.advertisement_data_map.clear()
+            ble_manager.discovered_devices.clear()
+            return await dynamic_device_selection(ble_manager, timeout)
+        return False, False  # Not connected, not user quit
+
+    # Build a final table for selection
+    _display_device_table(discovered_devices, ble_manager, timeout)
+
+    # Default return values
+    connected, user_quit = False, False
+
+    selection_loop = True
+    while selection_loop:
+        selection = console.input(
+            "\n[bold yellow]Enter device number to connect, 'r' to rescan, or 'q' to quit: [/bold yellow]",
+        )
+
+        if selection.lower() == "q":
+            connected, user_quit = False, True  # Not connected, user quit
+            selection_loop = False
+        elif selection.lower() == "r":
+            # Reset and restart scanning
+            discovered_devices.clear()
+            ble_manager.advertisement_data_map.clear()
+            ble_manager.discovered_devices.clear()
+            return await dynamic_device_selection(ble_manager, timeout)
+        else:
+            try:
+                index = int(selection) - 1
+                connected, user_quit = await _handle_device_selection(index, discovered_devices, ble_manager)
+
+                if connected:
+                    selection_loop = False
+                elif not user_quit:
+                    # Ask if user wants to try again
+                    retry = console.input("[bold yellow]Try again? (y/n): [/bold yellow]")
+                    if retry.lower() == "y":
+                        # Restart scanning
+                        discovered_devices.clear()
+                        ble_manager.advertisement_data_map.clear()
+                        ble_manager.discovered_devices.clear()
+                        return await dynamic_device_selection(ble_manager, timeout)
+                    connected, user_quit = False, True  # User quit
+                    selection_loop = False
+            except ValueError:
+                console.print("[bold red]Please enter a number, 'r', or 'q'![/bold red]")
+
+    return connected, user_quit
+
+
+async def _handle_user_input(
+    user_input: str,
+    ctx: DeviceSelectionContext,
+) -> tuple[bool, bool, bool]:
+    """Handle user input during device scanning.
+
+    Args:
+        user_input: Input from the user
+        ctx: Device selection context
+
+    Returns:
+        Tuple of (break_loop, connected_successfully, user_quit)
+    """
+    # Check if the input is a device number
+    if user_input.strip():
+        try:
+            device_index = int(user_input.strip()) - 1
+
+            # Stop scanning first
+            ctx.stop_event.set()
+            await asyncio.wait_for(
+                asyncio.gather(ctx.scan_task, ctx.ui_task, return_exceptions=True),
+                timeout=2.0,
+            )
+
+            try:
+                # Try to connect to the selected device
+                connected, user_quit = await _handle_device_selection(
+                    device_index, ctx.discovered_devices, ctx.ble_manager
+                )
+            except ValueError:
+                # Not a number, treat as invalid input
+                console.print(
+                    f"[bold red]Invalid input: {user_input}. Press Enter or enter a device number.[/bold red]",
+                )
+                await asyncio.sleep(1)  # Brief pause so user can see the error
+                # Continue scanning
+                ctx.ui_update_needed.set()  # Force UI refresh
+                return False, False, False
+            else:
+                return True, connected, user_quit
+        except ValueError:
+            # Not a number, treat as invalid input
+            console.print(
+                f"[bold red]Invalid input: {user_input}. Press Enter or enter a device number.[/bold red]",
+            )
+            await asyncio.sleep(1)  # Brief pause so user can see the error
+            # Continue scanning
+            ctx.ui_update_needed.set()  # Force UI refresh
+            return False, False, False
+    else:
+        # Empty input (just Enter key) - stop scanning and show menu
+        ctx.stop_event.set()
+        await asyncio.wait_for(
+            asyncio.gather(ctx.scan_task, ctx.ui_task, return_exceptions=True),
+            timeout=2.0,
+        )
+        return True, False, False
+
+
+async def _cleanup_tasks(stop_event: asyncio.Event, scan_task: asyncio.Task, ui_task: asyncio.Task) -> None:
+    """Clean up running tasks.
+
+    Args:
+        stop_event: Event to signal when to stop scanning
+        scan_task: Scanning task
+        ui_task: UI update task
+    """
+    # Make sure scanning is stopped
+    stop_event.set()
+
+    # Cancel any running tasks
+    if not scan_task.done():
+        scan_task.cancel()
+        with contextlib.suppress(TimeoutError, asyncio.CancelledError):
+            await asyncio.wait_for(scan_task, timeout=1.0)
+
+    if not ui_task.done():
+        ui_task.cancel()
+        with contextlib.suppress(TimeoutError, asyncio.CancelledError):
+            await asyncio.wait_for(ui_task, timeout=1.0)
 
 
 async def dynamic_device_selection(ble_manager: BLEManager, timeout: float = 10.0) -> tuple[bool, bool]:
@@ -73,157 +391,37 @@ async def dynamic_device_selection(ble_manager: BLEManager, timeout: float = 10.
         # Log device discovery for debugging
         logger.debug(f"Device discovered: {device.name or 'Unknown'} ({device.address})")
 
-    # Start scanning task
-    async def scan_for_devices():
-        # Create a new scanner each time
-        scanner = bleak.BleakScanner(detection_callback=device_found_callback)
-
-        try:
-            # Start scanning
-            await scanner.start()
-            logger.debug("Scanner started")
-
-            # Keep scanning until timeout or stop_event
-            scan_end_time = time.time() + timeout
-            while time.time() < scan_end_time and not stop_event.is_set():
-                await asyncio.sleep(0.1)
-
-            logger.debug(f"Scan finished: timeout={time.time() >= scan_end_time}, stopped={stop_event.is_set()}")
-
-        finally:
-            # Ensure scanner is stopped
-            await scanner.stop()
-            logger.debug("Scanner stopped")
-            ble_manager.discovered_devices = discovered_devices.copy()
-
-    # Task to update the UI when needed (runs in the main asyncio loop)
-    async def update_ui():
-        last_update_time = 0
-        last_device_count = 0
-        force_update = False
-
-        while not stop_event.is_set():
-            try:
-                # Wait for signal with timeout
-                try:
-                    await asyncio.wait_for(ui_update_needed.wait(), timeout=0.5)
-                    ui_update_needed.clear()
-                    force_update = True  # Force update when signal is received
-                except TimeoutError:
-                    # Force update every 3 seconds regardless of signal
-                    if time.time() - last_update_time >= TIME_BETWEEN_UPDATES:
-                        force_update = True
-                    else:
-                        continue  # No update needed
-
-                # Check if we need to update the UI
-                current_device_count = len(discovered_devices)
-
-                # Skip update if no new devices and not forced
-                if not force_update and current_device_count == last_device_count:
-                    continue
-
-                # Track last update time and device count
-                last_update_time = time.time()
-                last_device_count = current_device_count
-                force_update = False  # Reset force flag
-
-                # Create new table for each update
-                table = Table(title="Discovered Devices")
-                table.add_column("#", justify="right", style="cyan")
-                table.add_column("Name", style="green")
-                table.add_column("Address", style="blue")
-                table.add_column("RSSI", justify="right")
-
-                # Add devices to table
-                for i, device in enumerate(discovered_devices):
-                    adv_data = ble_manager.advertisement_data_map.get(device.address)
-                    rssi = adv_data.rssi if adv_data else "N/A"
-
-                    table.add_row(str(i + 1), device.name or "Unknown", device.address, str(rssi))
-
-                # Clear console and redraw (in main thread)
-                console.clear()
-                console.print("[bold]Scanning for BLE devices...[/bold]")
-                console.print(f"[dim]Scan will continue for up to {timeout} seconds[/dim]")
-                if discovered_devices:
-                    console.print(table)
-                    console.print(
-                        "[bold yellow]Enter a device number to select it immediately, press Enter for options, or wait "
-                        "for scan to complete[/bold yellow]",
-                    )
-                else:
-                    console.print("[dim]No devices found yet...[/dim]")
-                    console.print(
-                        "[bold yellow]Press Enter for options or wait for devices to be discovered[/bold yellow]",
-                    )
-
-            except Exception:
-                logger.exception("Error updating UI")
-                await asyncio.sleep(0.5)  # Avoid tight loop on error
-
     # Create the tasks
-    scan_task = asyncio.create_task(scan_for_devices())
-    ui_task = asyncio.create_task(update_ui())
+    scan_task = asyncio.create_task(_scan_for_devices(device_found_callback, stop_event, timeout))
+    ui_task = asyncio.create_task(
+        _update_device_table_ui(discovered_devices, ble_manager, timeout, ui_update_needed, stop_event)
+    )
+
+    # Create the context
+    ctx = DeviceSelectionContext(
+        ble_manager=ble_manager,
+        discovered_devices=discovered_devices,
+        stop_event=stop_event,
+        ui_update_needed=ui_update_needed,
+        scan_task=scan_task,
+        ui_task=ui_task,
+        timeout=timeout,
+    )
+
+    connected, user_quit = False, False
 
     # Set up input handling
     try:
         while not scan_task.done():
-            # Get user input with timeout
             try:
                 # Wait for user input
                 user_input = await asyncio.to_thread(console.input, "")
 
-                # Check if the input is a device number
-                try:
-                    # If input is a number and valid, connect to that device
-                    if user_input.strip():
-                        device_index = int(user_input.strip()) - 1
+                # Handle user input
+                break_loop, connected, user_quit = await _handle_user_input(user_input, ctx)
 
-                        # Stop scanning first
-                        stop_event.set()
-                        await asyncio.wait_for(
-                            asyncio.gather(scan_task, ui_task, return_exceptions=True),
-                            timeout=2.0,
-                        )
-
-                        # Check if the device index is valid
-                        if 0 <= device_index < len(discovered_devices):
-                            device = discovered_devices[device_index]
-                            console.print(
-                                f"[bold]Connecting to {device.name or 'Unknown'} ({device.address})...[/bold]",
-                            )
-                            connected = await ble_manager.connect_to_device(device)
-
-                            if connected:
-                                console.print(f"[bold green]Successfully connected to {device.address}![/bold green]")
-                                return True, False  # Connected, not user quit
-                            console.print(f"[bold red]Failed to connect to {device.address}![/bold red]")
-                            # Return to selection menu rather than quitting
-                            break
-                        console.print(f"[bold red]Invalid device number: {user_input}![/bold red]")
-                        await asyncio.sleep(1)  # Brief pause so user can see the error
-                        # Continue scanning
-                        stop_event.clear()
-                        scan_task = asyncio.create_task(scan_for_devices())
-                        ui_task = asyncio.create_task(update_ui())
-                        continue
-                    # Empty input (just Enter key) - stop scanning and show menu
-                    stop_event.set()
-                    await asyncio.wait_for(
-                        asyncio.gather(scan_task, ui_task, return_exceptions=True),
-                        timeout=2.0,
-                    )
+                if break_loop:
                     break
-                except ValueError:
-                    # Not a number, treat as Enter key
-                    console.print(
-                        f"[bold red]Invalid input: {user_input}. Press Enter or enter a device number.[/bold red]",
-                    )
-                    await asyncio.sleep(1)  # Brief pause so user can see the error
-                    # Continue scanning
-                    ui_update_needed.set()  # Force UI refresh
-                    continue
 
             except TimeoutError:
                 # No input received, continue scanning
@@ -238,88 +436,16 @@ async def dynamic_device_selection(ble_manager: BLEManager, timeout: float = 10.
             ui_task.cancel()
 
     finally:
-        # Make sure scanning is stopped and tasks are cleaned up
-        stop_event.set()
+        # Clean up tasks
+        await _cleanup_tasks(stop_event, scan_task, ui_task)
 
-        # Cancel any running tasks
-        if not scan_task.done():
-            scan_task.cancel()
-            with contextlib.suppress(TimeoutError, asyncio.CancelledError):
-                await asyncio.wait_for(scan_task, timeout=1.0)
+    # If we didn't connect during scanning, show the selection menu
+    if not connected:
+        # Save discovered devices to the BLE manager
+        ble_manager.discovered_devices = discovered_devices.copy()
+        return await _show_selection_menu(discovered_devices, ble_manager, timeout)
 
-        if not ui_task.done():
-            ui_task.cancel()
-            with contextlib.suppress(TimeoutError, asyncio.CancelledError):
-                await asyncio.wait_for(ui_task, timeout=1.0)
-
-    # Show selection menu after scan completes or user presses Enter
-    if discovered_devices:
-        # Build a final table for selection
-        table = Table(title="Discovered Devices")
-        table.add_column("#", justify="right", style="cyan")
-        table.add_column("Name", style="green")
-        table.add_column("Address", style="blue")
-        table.add_column("RSSI", justify="right")
-
-        for i, device in enumerate(discovered_devices):
-            adv_data = ble_manager.advertisement_data_map.get(device.address)
-            rssi = adv_data.rssi if adv_data else "N/A"
-
-            table.add_row(str(i + 1), device.name or "Unknown", device.address, str(rssi))
-
-        console.clear()
-        console.print("[bold]Device Selection[/bold]")
-        console.print(table)
-
-        while True:
-            selection = console.input(
-                "\n[bold yellow]Enter device number to connect, 'r' to rescan, or 'q' to quit: [/bold yellow]",
-            )
-
-            if selection.lower() == "q":
-                return False, True  # Not connected, user quit
-
-            if selection.lower() == "r":
-                # Reset and restart scanning
-                discovered_devices.clear()
-                ble_manager.advertisement_data_map.clear()
-                ble_manager.discovered_devices.clear()
-                return await dynamic_device_selection(ble_manager, timeout)
-
-            try:
-                index = int(selection) - 1
-                if 0 <= index < len(discovered_devices):
-                    device = discovered_devices[index]
-                    # Connect to selected device
-                    console.print(f"[bold]Connecting to {device.name or 'Unknown'} ({device.address})...[/bold]")
-                    connected = await ble_manager.connect_to_device(device)
-
-                    if connected:
-                        console.print(f"[bold green]Successfully connected to {device.address}![/bold green]")
-                        return True, False  # Connected, not user quit
-                    console.print(f"[bold red]Failed to connect to {device.address}![/bold red]")
-                    # Ask if user wants to try again
-                    retry = console.input("[bold yellow]Try again? (y/n): [/bold yellow]")
-                    if retry.lower() == "y":
-                        # Restart scanning
-                        discovered_devices.clear()
-                        ble_manager.advertisement_data_map.clear()
-                        ble_manager.discovered_devices.clear()
-                        return await dynamic_device_selection(ble_manager, timeout)
-                    return False, True  # User quit
-                console.print("[bold red]Invalid selection![/bold red]")
-            except ValueError:
-                console.print("[bold red]Please enter a number, 'r', or 'q'![/bold red]")
-    else:
-        console.print("[bold red]No devices found![/bold red]")
-        rescan = console.input("[bold yellow]Press 'r' to rescan or any other key to quit: [/bold yellow]")
-        if rescan.lower() == "r":
-            # Clear previous state before rescanning
-            discovered_devices.clear()
-            ble_manager.advertisement_data_map.clear()
-            ble_manager.discovered_devices.clear()
-            return await dynamic_device_selection(ble_manager, timeout)
-        return False, False  # Not connected, not user quit
+    return connected, user_quit
 
 
 async def connect_to_device(
@@ -341,45 +467,46 @@ async def connect_to_device(
     Returns:
         Tuple of (connected successfully, user quit)
     """
+    connected, user_quit = False, False
+
     # Interactive mode
     if interactive and not address and not name:
         # Use dynamic device selection instead of the old interactive selection
-        return await dynamic_device_selection(ble_manager, scan_timeout)
+        connected, user_quit = await dynamic_device_selection(ble_manager, scan_timeout)
 
     # Connect by address
-    if address:
+    elif address:
         console.print(f"[bold]Connecting to device with address {address}...[/bold]")
         connected = await ble_manager.connect_to_device(address)
 
         if connected:
             console.print(f"[bold green]Successfully connected to {address}![/bold green]")
-            return True, False  # Connected, not user quit
-        console.print(f"[bold red]Failed to connect to {address}![/bold red]")
-        return False, False  # Not connected, not user quit
+        else:
+            console.print(f"[bold red]Failed to connect to {address}![/bold red]")
 
     # Connect by name
-    if name:
+    elif name:
         console.print(f"[bold]Searching for device with name '{name}'...[/bold]")
         devices = await ble_manager.discover_devices(timeout=scan_timeout, name_filter=name)
 
         if not devices:
             console.print(f"[bold red]No devices found with name '{name}'![/bold red]")
-            return False, False  # Not connected, not user quit
+        else:
+            # Connect to the first matching device
+            device = devices[0]
+            console.print(f"[bold]Connecting to {device.name} ({device.address})...[/bold]")
+            connected = await ble_manager.connect_to_device(device)
 
-        # Connect to the first matching device
-        device = devices[0]
-        console.print(f"[bold]Connecting to {device.name} ({device.address})...[/bold]")
-        connected = await ble_manager.connect_to_device(device)
-
-        if connected:
-            console.print(f"[bold green]Successfully connected to {device.address}![/bold green]")
-            return True, False  # Connected, not user quit
-        console.print(f"[bold red]Failed to connect to {device.address}![/bold red]")
-        return False, False  # Not connected, not user quit
+            if connected:
+                console.print(f"[bold green]Successfully connected to {device.address}![/bold green]")
+            else:
+                console.print(f"[bold red]Failed to connect to {device.address}![/bold red]")
 
     # No connection method specified
-    console.print("[bold red]No device specified for connection![/bold red]")
-    return False, False  # Not connected, not user quit
+    else:
+        console.print("[bold red]No device specified for connection![/bold red]")
+
+    return connected, user_quit
 
 
 def print_test_results(results: dict[str, Any], verbose=False):
@@ -477,92 +604,246 @@ def print_test_results(results: dict[str, Any], verbose=False):
         console.print(f"\n[bold red]{results.get('failed_tests', 0)} tests failed![/bold red]")
 
 
-async def run_ble_tests(args):
-    """Run BLE tests based on command line arguments."""
+async def _connect_by_address(address: str, ble_manager: BLEManager, _timeout: float) -> bool:
+    """Connect to a device using its address.
+
+    Args:
+        address: Device address
+        ble_manager: BLE Manager instance
+        _timeout: Scan timeout in seconds (unused, but kept for API consistency)
+
+    Returns:
+        True if successfully connected, False otherwise
+    """
+    console.print(f"[bold]Connecting to device with address {address}...[/bold]")
+    connected = await ble_manager.connect_to_device(address)
+    if not connected:
+        console.print(f"[bold red]Failed to connect to {address}![/bold red]")
+    return connected
+
+
+async def _connect_by_name(name: str, ble_manager: BLEManager, timeout: float) -> bool:
+    """Connect to a device using its name.
+
+    Args:
+        name: Device name (partial match)
+        ble_manager: BLE Manager instance
+        timeout: Scan timeout in seconds
+
+    Returns:
+        True if successfully connected, False otherwise
+    """
+    console.print(f"[bold]Searching for device with name '{name}'...[/bold]")
+    devices = await ble_manager.discover_devices(timeout=timeout)
+    matching_devices = [d for d in devices if name.lower() in (d.name or "").lower()]
+    if not matching_devices:
+        console.print(f"[bold red]No devices found with name containing '{name}'![/bold red]")
+        return False
+
+    device = matching_devices[0]
+    console.print(f"[bold]Connecting to {device.name} ({device.address})...[/bold]")
+    connected = await ble_manager.connect_to_device(device)
+    if not connected:
+        console.print(f"[bold red]Failed to connect to {device.address}![/bold red]")
+    return connected
+
+
+async def _run_test_modules(test_runner: TestRunner, all_tests: list) -> dict:
+    """Run all discovered test modules.
+
+    Args:
+        test_runner: TestRunner instance
+        all_tests: List of (module_name, tests) tuples
+
+    Returns:
+        Dict containing aggregated test results
+    """
+    all_results = {
+        "results": {},
+        "passed_tests": 0,
+        "failed_tests": 0,
+        "total_tests": 0,
+    }
+
+    # Run tests
+    for module_name, tests in all_tests:
+        console.print(f"[bold]Running {len(tests)} tests in {module_name}...[/bold]")
+        results = await test_runner.run_tests(tests)
+
+        # Merge results
+        if "results" in results:
+            all_results["results"].update(results["results"])
+        all_results["passed_tests"] += results.get("passed_tests", 0)
+        all_results["failed_tests"] += results.get("failed_tests", 0)
+        all_results["total_tests"] += results.get("total_tests", 0)
+
+    return all_results
+
+
+async def _cleanup_loop_resources(loop: asyncio.AbstractEventLoop) -> None:
+    """Clean up asyncio resources from the event loop.
+
+    Args:
+        loop: The event loop to clean
+    """
+    # More aggressive task cancellation to ensure clean exit
+    # Get all tasks except the current one
+    remaining_tasks = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
+
+    if remaining_tasks:
+        logger.debug(f"Cancelling {len(remaining_tasks)} remaining tasks")
+
+        # First attempt to cancel all tasks
+        for task in remaining_tasks:
+            task.cancel()
+
+        # Wait for tasks to acknowledge cancellation
+        try:
+            # Set a short timeout to avoid blocking indefinitely
+            await asyncio.wait(remaining_tasks, timeout=2.0)
+            logger.debug("Tasks acknowledged cancellation")
+        except Exception as e:
+            logger.debug(f"Error waiting for task cancellation: {e}")
+
+        # Check for any tasks that didn't cancel properly
+        still_running = [t for t in remaining_tasks if not t.done()]
+        if still_running:
+            logger.debug(f"{len(still_running)} tasks still running after cancellation")
+
+            # Try gathering with exceptions to force completion
+            try:
+                await asyncio.gather(*still_running, return_exceptions=True)
+            except Exception as e:
+                logger.debug(f"Error during forced task completion: {e}")
+
+    # Force shutdown of all executor threads
+    # Force shutdown of any thread pools
+    executor = concurrent.futures.ThreadPoolExecutor()
+    executor._threads.clear()
+
+    # Close all running transports - this helps with hanging socket connections
+    for transport in getattr(loop, "_transports", set()):
+        if hasattr(transport, "close"):
+            logger.debug(f"Closing transport: {transport}")
+            try:
+                transport.close()
+            except Exception as e:
+                logger.debug(f"Error closing transport: {e}")
+
+
+async def _discover_and_count_tests(test_runner: TestRunner, test_specifiers: list[str]) -> tuple[list, int]:
+    """Discover tests and count them.
+
+    Args:
+        test_runner: TestRunner instance
+        test_specifiers: List of test specifier strings
+
+    Returns:
+        Tuple of (list of test modules, total test count)
+    """
+    all_tests = test_runner.discover_tests(test_specifiers)
+    if not all_tests:
+        console.print("[bold red]No tests were discovered in any specified directories![/bold red]")
+        console.print("[dim]Check that your test files begin with 'test_' and are in the correct location.[/dim]")
+        return [], 0
+
+    # Count total tests
+    total_tests = sum(len(tests) for _, tests in all_tests)
+    console.print(f"[bold]Found {total_tests} test(s) in {len(all_tests)} module(s)[/bold]")
+
+    return all_tests, total_tests
+
+
+async def _attempt_device_connection(args) -> tuple[BLEManager, bool]:
+    """Attempt to connect to a device using the provided arguments.
+
+    Args:
+        args: Command line arguments
+
+    Returns:
+        Tuple of (BLEManager instance, connection success)
+    """
     # Create BLE manager
     ble_manager = BLEManager()
+    connected = False
 
+    # Connect to device based on provided options
+    if args.address:
+        connected = await _connect_by_address(args.address, ble_manager, args.scan_timeout)
+    elif args.name:
+        connected = await _connect_by_name(args.name, ble_manager, args.scan_timeout)
+    else:
+        # Interactive discovery
+        console.print("[bold]No device address or name specified, starting interactive device discovery...[/bold]")
+        connected, user_quit = await connect_to_device(
+            ble_manager,
+            interactive=True,
+            scan_timeout=args.scan_timeout,
+        )
+        if not connected and user_quit:
+            console.print("[bold yellow]User quit device selection![/bold yellow]")
+
+    if not connected:
+        console.print("[bold red]Failed to connect to device![/bold red]")
+
+    return ble_manager, connected
+
+
+async def _perform_cleanup(test_runner: TestRunner, ble_manager: BLEManager, connected: bool):
+    """Perform cleanup operations.
+
+    Args:
+        test_runner: TestRunner instance
+        ble_manager: BLEManager instance
+        connected: Whether a device is connected
+    """
+    # Clean up test context tasks
+    try:
+        await test_runner.test_context.cleanup_tasks()
+    except Exception:
+        logger.exception("Error cleaning up test context")
+
+    # Disconnect from device
+    if connected:
+        console.print("[bold]Disconnecting from device...[/bold]")
+        try:
+            await ble_manager.disconnect()
+        except Exception:
+            logger.exception("Error during disconnect")
+
+    # Clean up loop resources
+    loop = asyncio.get_running_loop()
+    await _cleanup_loop_resources(loop)
+
+    # Log completion
+    logger.debug("Cleanup complete, exiting run_ble_tests")
+
+
+async def run_ble_tests(args):
+    """Run BLE tests based on command line arguments."""
     # Create console for rich output
     console = get_console()
 
-    # Create a TestRunner instance
-    test_runner = TestRunner(ble_manager)
+    # Create a TestRunner instance and BLE manager
+    ble_manager, test_runner = None, None
+    connected = False
 
     try:
-        # IMPORTANT: First discover tests before attempting connection
-        # This allows test packages to register their service UUIDs during initialization
-        # Determine test directory and tests to run based on test specifiers
-        all_tests = []
-        logger.debug(f"args.test_specifiers: {args.test_specifiers}")
-        # Process each test specifier to determine its test directory
-        all_tests = test_runner.discover_tests(args.test_specifiers)
-        if not all_tests:
-            console.print("[bold red]No tests were discovered in any specified directories![/bold red]")
-            console.print("[dim]Check that your test files begin with 'test_' and are in the correct location.[/dim]")
+        # Create test runner
+        ble_manager, connected = await _attempt_device_connection(args)
+        test_runner = TestRunner(ble_manager)
+
+        # Exit if not connected
+        if not connected:
             return
 
-        # sum number of tests in all modules:
-        total_tests = sum(len(tests) for _, tests in all_tests)
-        console.print(f"[bold]Found {total_tests} test(s) in {len(all_tests)} module(s)[/bold]")
+        # Discover tests
+        all_tests, total_count = await _discover_and_count_tests(test_runner, args.test_specifiers)
+        if not all_tests:
+            return
 
-        # Now that tests have been discovered and service UUIDs registered, connect to device
-        # Connect to device
-        if args.address:
-            # Connect directly to the specified address
-            console.print(f"[bold]Connecting to device with address {args.address}...[/bold]")
-            connected = await ble_manager.connect_to_device(args.address)
-            if not connected:
-                console.print(f"[bold red]Failed to connect to {args.address}![/bold red]")
-                return
-        elif args.name:
-            # Search for a device with the specified name
-            console.print(f"[bold]Searching for device with name '{args.name}'...[/bold]")
-            devices = await ble_manager.discover_devices(timeout=args.scan_timeout)
-            matching_devices = [d for d in devices if args.name.lower() in (d.name or "").lower()]
-            if not matching_devices:
-                console.print(f"[bold red]No devices found with name containing '{args.name}'![/bold red]")
-                return
-
-            device = matching_devices[0]
-            console.print(f"[bold]Connecting to {device.name} ({device.address})...[/bold]")
-            connected = await ble_manager.connect_to_device(device)
-            if not connected:
-                console.print(f"[bold red]Failed to connect to {device.address}![/bold red]")
-                return
-        else:
-            # No address or name specified, use interactive device discovery
-            console.print("[bold]No device address or name specified, starting interactive device discovery...[/bold]")
-            connected, user_quit = await connect_to_device(
-                ble_manager,
-                interactive=True,
-                scan_timeout=args.scan_timeout,
-            )
-            if not connected:
-                if user_quit:
-                    console.print("[bold yellow]User quit device selection![/bold yellow]")
-                else:
-                    console.print("[bold red]Failed to connect to device![/bold red]")
-                return
-
-        # Run tests from each discovered test directory
-        all_results = {
-            "results": {},
-            "passed_tests": 0,
-            "failed_tests": 0,
-            "total_tests": 0,
-        }
-
-        # Run tests
-        for module_name, tests in all_tests:
-            console.print(f"[bold]Running {len(tests)} tests in {module_name}...[/bold]")
-            results = await test_runner.run_tests(tests)
-
-            # Merge results
-            if "results" in results:
-                all_results["results"].update(results["results"])
-            all_results["passed_tests"] += results.get("passed_tests", 0)
-            all_results["failed_tests"] += results.get("failed_tests", 0)
-            all_results["total_tests"] += results.get("total_tests", 0)
+        # Run all tests and collect results
+        all_results = await _run_test_modules(test_runner, all_tests)
 
         # Print consolidated results
         if all_results["total_tests"] > 0:
@@ -571,72 +852,17 @@ async def run_ble_tests(args):
             console.print("[bold red]No tests were run![/bold red]")
 
     finally:
-        # Clean up test context tasks
-        if "test_runner" in locals():
-            try:
-                await test_runner.test_context.cleanup_tasks()
-            except Exception:
-                logger.exception("Error cleaning up test context")
-
-        # Disconnect from device
-        console.print("[bold]Disconnecting from device...[/bold]")
-        try:
-            await ble_manager.disconnect()
-        except Exception:
-            logger.exception("Error during disconnect")
-
-        # More aggressive task cancellation to ensure clean exit
-        # Get all tasks except the current one
-        remaining_tasks = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
-
-        if remaining_tasks:
-            logger.debug(f"Cancelling {len(remaining_tasks)} remaining tasks")
-
-            # First attempt to cancel all tasks
-            for task in remaining_tasks:
-                task.cancel()
-
-            # Wait for tasks to acknowledge cancellation
-            try:
-                # Set a short timeout to avoid blocking indefinitely
-                await asyncio.wait(remaining_tasks, timeout=2.0)
-                logger.debug("Tasks acknowledged cancellation")
-            except Exception as e:
-                logger.debug(f"Error waiting for task cancellation: {e}")
-
-            # Check for any tasks that didn't cancel properly
-            still_running = [t for t in remaining_tasks if not t.done()]
-            if still_running:
-                logger.debug(f"{len(still_running)} tasks still running after cancellation")
-
-                # Try gathering with exceptions to force completion
-                try:
-                    await asyncio.gather(*still_running, return_exceptions=True)
-                except Exception as e:
-                    logger.debug(f"Error during forced task completion: {e}")
-
-        # Force shutdown of all executor threads
-        loop = asyncio.get_running_loop()
-
-        # Force shutdown of any thread pools
-        executor = concurrent.futures.ThreadPoolExecutor()
-        executor._threads.clear()
-
-        # Close all running transports - this helps with hanging socket connections
-        for transport in getattr(loop, "_transports", set()):
-            if hasattr(transport, "close"):
-                logger.debug(f"Closing transport: {transport}")
-                try:
-                    transport.close()
-                except Exception as e:
-                    logger.debug(f"Error closing transport: {e}")
-
-        # Force event loop to close by returning from this coroutine
-        logger.debug("Cleanup complete, exiting run_ble_tests")
+        # Perform cleanup if test_runner was created
+        if test_runner and ble_manager:
+            await _perform_cleanup(test_runner, ble_manager, connected)
 
 
-def main():
-    """Execute the main function."""
+def _create_parser() -> argparse.ArgumentParser:
+    """Create the command-line argument parser.
+
+    Returns:
+        Configured ArgumentParser
+    """
     parser = argparse.ArgumentParser(
         description="BLE IoT Device Testing Tool - Discovers and runs tests for BLE devices. "
         "If no device address or name is provided, interactive device discovery will be used.",
@@ -654,7 +880,7 @@ def main():
     )
 
     # Test options
-    test_group = parser.add_argument_group("Test Options")
+    parser.add_argument_group("Test Options")
     # Remove test-dir argument and keep only positional arguments for test specifiers
     parser.add_argument(
         "test_specifiers",
@@ -678,20 +904,51 @@ def main():
     )
     log_group.add_argument("--log-file", help="Log file path (default: no file logging)")
 
-    args = parser.parse_args()
+    return parser
 
-    # Configure logging using our new setup function
+
+def _cleanup_loop_on_interrupt(loop: asyncio.AbstractEventLoop):
+    """Clean up the event loop after a keyboard interrupt.
+
+    Args:
+        loop: The event loop to clean up
+    """
+    try:
+        # Cancel all remaining tasks
+        remaining = asyncio.all_tasks(loop)
+        if remaining:
+            logger.debug(f"Cancelling {len(remaining)} remaining tasks due to keyboard interrupt")
+            for task in remaining:
+                task.cancel()
+
+            # Short wait for cancellation
+            with contextlib.suppress(Exception):
+                loop.run_until_complete(asyncio.wait(remaining, timeout=1.0, loop=loop))
+
+        # Close the loop
+        with contextlib.suppress(Exception):
+            loop.close()
+    except Exception:
+        logger.exception("Error during keyboard interrupt cleanup")
+
+
+def _run_main_program(args):
+    """Run the main program with the given arguments.
+
+    Args:
+        args: Parsed command-line arguments
+    """
+    # Configure logging
     setup_logging(verbose=args.verbose, log_file=args.log_file)
 
-    # Run tests
+    logger.debug("Starting test execution")
+
+    # Create a new event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     try:
-        logger.debug("Starting test execution")
-
-        # Create a new event loop with custom executor shutdown timeout
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        # Run the main coroutine with our custom loop
+        # Run the main coroutine
         loop.run_until_complete(run_ble_tests(args))
 
         # Perform manual cleanup after run completes
@@ -716,31 +973,24 @@ def main():
         logger.debug("Test execution interrupted by user")
         console.print("\n[bold yellow]Test execution interrupted![/bold yellow]")
 
-        # Force shutdown of any running tasks and thread pools
-        if "loop" in locals():
-            try:
-                # Cancel all remaining tasks
-                remaining = asyncio.all_tasks(loop)
-                if remaining:
-                    logger.debug(f"Cancelling {len(remaining)} remaining tasks due to keyboard interrupt")
-                    for task in remaining:
-                        task.cancel()
-
-                    # Short wait for cancellation
-                    with contextlib.suppress(Exception):
-                        loop.run_until_complete(asyncio.wait(remaining, timeout=1.0, loop=loop))
-
-                # Close the loop
-                with contextlib.suppress(Exception):
-                    loop.close()
-            except Exception:
-                logger.exception("Error during keyboard interrupt cleanup")
+        # Clean up the loop
+        _cleanup_loop_on_interrupt(loop)
 
     except Exception as e:
         logger.exception("Error during test execution")
         console.print(f"\n[bold red]Error: {e!s}[/bold red]")
         if args.verbose:
             console.print_exception()
+
+
+def main():
+    """Execute the main function."""
+    parser = _create_parser()
+    args = parser.parse_args()
+
+    try:
+        # Run the main program
+        _run_main_program(args)
     finally:
         # Ensure all loggers have flushed their output
         for handler in logging.root.handlers:

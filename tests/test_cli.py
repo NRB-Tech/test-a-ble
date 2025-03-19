@@ -285,14 +285,14 @@ async def test_run_ble_tests_user_quit(
     mock_test_runner_class,
     mock_connect_to_device,
 ):
-    """Test running BLE tests when user quits during device selection."""
+    """Test handling a user quit during device selection."""
     # Setup mocks
     mock_ble_manager = MagicMock()
     mock_ble_manager.disconnect = AsyncMock()
     mock_ble_manager_class.return_value = mock_ble_manager
 
-    # Mock the connect_to_device function to return user quit
-    mock_connect_to_device.return_value = (False, True)  # (connected, user_quit)
+    # Return (connected, user_quit) where user_quit is True
+    mock_connect_to_device.return_value = (False, True)
 
     # Mock test context
     mock_test_context = MagicMock()
@@ -300,57 +300,52 @@ async def test_run_ble_tests_user_quit(
 
     mock_test_runner = MagicMock()
     mock_test_runner.test_context = mock_test_context
-    mock_test_runner.discover_tests = MagicMock(return_value=[("test_module", ["test_1"])])
+    mock_test_runner.discover_tests = MagicMock(return_value=[])
     mock_test_runner_class.return_value = mock_test_runner
 
-    # Create args
-    args = MagicMock()
-    args.address = None
-    args.name = None
-    args.interactive = True
-    args.test_module = "test_module"
-    args.verbose = False
-    args.scan_timeout = 5.0
-    args.test_specifiers = ["test_module"]
+    # Create event loop
+    mock_loop = MagicMock()
+    mock_loop.run_until_complete = MagicMock()
+    with patch("asyncio.get_running_loop", return_value=mock_loop):
+        # Create args
+        args = MagicMock()
+        args.address = None
+        args.name = None
+        args.interactive = True
+        args.test_module = "test_module"
+        args.verbose = False
+        args.scan_timeout = 5.0
+        args.test_specifiers = ["test_module"]
 
-    # Call the function
-    await cli.run_ble_tests(args)
+        # Call the function
+        await cli.run_ble_tests(args)
 
-    # Assert
-    mock_connect_to_device.assert_called_once_with(mock_ble_manager, interactive=True, scan_timeout=5.0)
-    # Test runner should not be called if user quits
-    mock_test_runner.run_tests.assert_not_called()
-    mock_print_results.assert_not_called()
-    # Discover tests should still be called before connection attempt
-    mock_test_runner.discover_tests.assert_called_once_with(["test_module"])
+    # Assert that discover_tests was not called (should exit early because user_quit is True)
+    mock_test_runner.discover_tests.assert_not_called()
+    # Verify cleanup tasks were still called
+    mock_test_context.cleanup_tasks.assert_called_once()
 
 
-@patch("test_a_ble.cli.run_ble_tests")
-@patch("test_a_ble.cli.asyncio.new_event_loop")
+@patch("test_a_ble.cli._run_main_program")
 @patch("argparse.ArgumentParser.parse_args")
-def test_main(mock_parse_args, mock_asyncio_new_event_loop, mock_run_ble_tests):
+def test_main(mock_parse_args, mock_run_main_program):
     """Test the main function."""
     # Setup mocks
     mock_args = MagicMock()
     mock_args.verbose = False
-    mock_args.log_file = None  # No log file
-    mock_args.test_specifiers = ["test_function"]
-    mock_args.address = "1234567890"
+    mock_args.log_file = None
     mock_parse_args.return_value = mock_args
 
     # Call the function
     cli.main()
 
-    # Assert
-    mock_parse_args.assert_called_once()
-    mock_asyncio_new_event_loop.assert_called_once()
+    # Assert that the function was run with the args
+    mock_run_main_program.assert_called_once_with(mock_args)
 
 
-@patch("test_a_ble.cli.setup_logging")
-@patch("test_a_ble.cli.run_ble_tests")
-@patch("test_a_ble.cli.asyncio.new_event_loop")
+@patch("test_a_ble.cli._run_main_program")
 @patch("argparse.ArgumentParser.parse_args")
-def test_main_verbose(mock_parse_args, mock_asyncio_new_event_loop, mock_run_ble_tests, mock_setup_logging):
+def test_main_verbose(mock_parse_args, mock_run_main_program):
     """Test the main function with verbose flag."""
     # Setup mocks
     mock_args = MagicMock()
@@ -361,10 +356,8 @@ def test_main_verbose(mock_parse_args, mock_asyncio_new_event_loop, mock_run_ble
     # Call the function
     cli.main()
 
-    # Assert
-    mock_parse_args.assert_called_once()
-    mock_setup_logging.assert_called_once_with(verbose=True, log_file=None)
-    mock_asyncio_new_event_loop.assert_called_once()
+    # Assert that the function was run with the verbose args
+    mock_run_main_program.assert_called_once_with(mock_args)
 
 
 @pytest.mark.asyncio

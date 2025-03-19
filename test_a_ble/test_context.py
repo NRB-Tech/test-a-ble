@@ -142,6 +142,102 @@ class NotificationWaiter:
         self.failure_reason: str | None = None
         self.complete_event = asyncio.Event()
 
+    def _check_callable_notification(self, data: bytes, current_expected: Callable) -> tuple[bool, str | None]:
+        """Check notification using a callable function.
+
+        Args:
+            data: The notification data
+            current_expected: Callable function to evaluate the notification
+
+        Returns:
+            Tuple of (is_match, failure_reason)
+        """
+        is_match = False
+        failure_reason = None
+
+        try:
+            result = current_expected(data)
+
+            # Handle tuple return format: (NotificationResult, Optional[str])
+            if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], NotificationResult):  # noqa: PLR2004
+                is_match, failure_reason = self._handle_notification_result_tuple(result, data)
+
+            # Handle direct NotificationResult enum
+            elif isinstance(result, NotificationResult):
+                is_match, failure_reason = self._handle_notification_result_enum(result, data)
+
+            # True = match, False = ignore (not a failure)
+            else:
+                is_match = bool(result)
+
+        except Exception:
+            # If the function raises an exception, log it but don't fail
+            logger.exception("Error in notification evaluation function")
+            # Keep both False
+
+        return is_match, failure_reason
+
+    def _handle_notification_result_tuple(self, result: tuple, data: bytes) -> tuple[bool, str | None]:
+        """Handle notification result in tuple format.
+
+        Args:
+            result: Tuple of (NotificationResult, Optional[str])
+            data: The notification data
+
+        Returns:
+            Tuple of (is_match, failure_reason)
+        """
+        notification_result, reason = result
+        is_match = False
+        failure_reason = None
+
+        if notification_result == NotificationResult.MATCH:
+            is_match = True
+        elif notification_result == NotificationResult.FAIL:
+            failure_reason = reason or f"Notification evaluated as failure condition: {data.hex()}"
+        # IGNORE - keep both False
+
+        return is_match, failure_reason
+
+    def _handle_notification_result_enum(self, result: NotificationResult, data: bytes) -> tuple[bool, str | None]:
+        """Handle notification result as NotificationResult enum.
+
+        Args:
+            result: NotificationResult enum value
+            data: The notification data
+
+        Returns:
+            Tuple of (is_match, failure_reason)
+        """
+        is_match = False
+        failure_reason = None
+
+        if result == NotificationResult.MATCH:
+            is_match = True
+        elif result == NotificationResult.FAIL:
+            failure_reason = f"Notification evaluated as failure condition: {data.hex()}"
+        # IGNORE - keep both False
+
+        return is_match, failure_reason
+
+    def _check_direct_comparison(self, data: bytes, current_expected: bytes) -> tuple[bool, str | None]:
+        """Check notification using direct comparison.
+
+        Args:
+            data: The notification data
+            current_expected: Expected bytes value
+
+        Returns:
+            Tuple of (is_match, failure_reason)
+        """
+        is_match = data == current_expected
+        failure_reason = None
+
+        if not is_match:
+            failure_reason = f"Notification {data.hex()} ≠ {current_expected.hex()} expected value"
+
+        return is_match, failure_reason
+
     def check_notification(self, data: bytes) -> tuple[bool, str | None]:
         """Check if a notification matches our criteria.
 
@@ -155,49 +251,16 @@ class NotificationWaiter:
         """
         current_expected = self.expected_value
 
+        # No expected value - any notification is a match
         if current_expected is None:
-            # No expected value - any notification is a match
             return True, None
 
+        # User provided a lambda/function to evaluate the notification
         if callable(current_expected):
-            # User provided a lambda/function to evaluate the notification
-            try:
-                result = current_expected(data)
-                if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], NotificationResult):  # noqa: PLR2004
-                    # Handle tuple return format: (NotificationResult, Optional[str])
-                    notification_result, reason = result
-                    if notification_result == NotificationResult.MATCH:
-                        return True, None
-                    if notification_result == NotificationResult.FAIL:
-                        return (
-                            False,
-                            reason or f"Notification evaluated as failure condition: {data.hex()}",
-                        )
-                    # IGNORE
-                    return False, None
-                if isinstance(result, NotificationResult):
-                    # Handle direct NotificationResult enum
-                    if result == NotificationResult.MATCH:
-                        return True, None
-                    if result == NotificationResult.FAIL:
-                        return (
-                            False,
-                            f"Notification evaluated as failure condition: {data.hex()}",
-                        )
-                    # IGNORE
-                    return False, None
-                # True = match, False = ignore (not a failure)
-                return bool(result), None
-            except Exception:
-                # If the function raises an exception, log it but don't fail
-                logger.exception("Error in notification evaluation function")
-                return False, None
-        else:
-            # Direct comparison with expected bytes
-            return (
-                data == current_expected,
-                f"Notification {data.hex()} ≠ {current_expected.hex()} expected value",
-            )
+            return self._check_callable_notification(data, current_expected)
+
+        # Direct comparison with expected bytes
+        return self._check_direct_comparison(data, current_expected)
 
     def on_notification(self, data) -> bool:
         """Handle a notification.
@@ -706,6 +769,169 @@ class TestContext:
 
         return self.handle_notification_waiter_result(waiter, timeout)
 
+    def _print_debug_information(self, characteristic_uuid: str) -> None:
+        """Print debug information for notifications received on a characteristic.
+
+        Args:
+            characteristic_uuid: UUID of the characteristic
+        """
+        if characteristic_uuid not in self.notification_subscriptions:
+            print(f"No subscription to {characteristic_uuid}")
+            return
+
+        sub = self.notification_subscriptions[characteristic_uuid]
+        if sub.waiter is None:
+            print(f"No waiter for {characteristic_uuid}")
+            return
+
+        if len(sub.waiter.received_notifications) == 0:
+            print(f"No notifications received for {characteristic_uuid}")
+            return
+
+        print(f"Received {len(sub.waiter.received_notifications)} notifications so far:")
+        for i, n in enumerate(sub.waiter.received_notifications):
+            print(f"  Notification {i + 1}: {n.hex() if n else 'None'}")
+            is_match, _ = sub.waiter.check_notification(n)
+            if is_match:
+                print("  --> This notification MATCHES the expected criteria")
+            else:
+                print("  --> Does NOT match expected criteria")
+
+    async def _process_user_input(self, user_input: str, characteristic_uuid: str) -> tuple[str, str] | None:
+        """Process user input during notification waiting.
+
+        Args:
+            user_input: User input string
+            characteristic_uuid: UUID of the characteristic being monitored
+
+        Returns:
+            Tuple of (command, message) or None to continue waiting
+        """
+        user_input = user_input.strip().lower()
+
+        # Process based on user input
+        if user_input in ["s", "skip"]:
+            return ("skip", "User chose to skip the test")
+        if user_input in ["f", "fail"]:
+            return ("fail", "User reported test failure")
+        if user_input == "d":
+            # Debug - show received notifications
+            self._print_debug_information(characteristic_uuid)
+            # Continue waiting
+            return None
+
+        # Invalid input
+        print("Invalid input. Type 's' to skip, 'f' to fail, or 'd' for debug info.")
+        return None
+
+    async def _handle_user_input(self, characteristic_uuid: str) -> tuple[str, str] | None:
+        """Handle user input during the waiting period.
+
+        Args:
+            characteristic_uuid: UUID of the characteristic being monitored
+
+        Returns:
+            Tuple of user response and message, or None if user input is cancelled
+        """
+        print("\nThe test will continue automatically when event is detected.")
+        print(
+            "If nothing happens, type 's' or 'skip' to skip, 'f' or 'fail' to fail the test, or 'd' for debug info.",
+        )
+
+        session = PromptSession()  # type: ignore
+        with patch_stdout():
+            while True:
+                user_input = None
+                try:
+                    user_input = await session.prompt_async()
+                except (EOFError, KeyboardInterrupt):
+                    # Handle Ctrl+D and Ctrl+C gracefully
+                    user_input = "f"  # Treat as "fail" to abort the test
+                except asyncio.CancelledError:
+                    # Task cancelled - exit cleanly
+                    logger.debug("User input task cancelled")
+                    break
+                except Exception:
+                    logger.exception("Error in user input handler")
+                    break
+
+                # Handle EOF or errors
+                if not user_input:
+                    logger.info("Input stream closed or returned empty input")
+                    break
+
+                # Process the input and get result
+                result = await self._process_user_input(user_input, characteristic_uuid)
+                if result:
+                    return result
+
+        return None
+
+    async def _run_notification_wait_with_user_input(
+        self, waiter: NotificationWaiter, characteristic_uuid: str, timeout: float
+    ) -> dict[str, Any]:
+        """Run notification wait with user input handling.
+
+        Args:
+            waiter: The notification waiter to use
+            characteristic_uuid: UUID of the characteristic to monitor
+            timeout: Timeout in seconds
+
+        Returns:
+            Dictionary with notification results
+
+        Raises:
+            TestSkip: If the user chooses to skip the test
+            TestFailure: If the user chooses to fail the test
+            TimeoutError: If no notification is received within the timeout
+        """
+        # Start user input handler
+        user_input_task = asyncio.create_task(self._handle_user_input(characteristic_uuid))
+
+        # Create a task for monitoring the notification event
+        notification_task = asyncio.create_task(waiter.complete_event.wait())
+
+        try:
+            # Wait for the first of the tasks to complete or for timeout
+            done, pending = await asyncio.wait(
+                [notification_task, user_input_task],
+                timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            # Determine which task completed first
+            if notification_task in done:
+                logger.info("Notification task completed first")
+                return self.handle_notification_waiter_result(waiter, timeout)
+
+            if user_input_task in done:
+                # User input finished first
+                result = None
+                if user_input_task.done():
+                    result = user_input_task.result()
+
+                if result:
+                    user_response, message = result
+                    logger.info(f"User input task completed first: {message}")
+
+                    # Raise appropriate exception based on user input
+                    if user_response == "skip":
+                        raise TestSkip("User chose to skip test")
+                    if user_response == "fail":
+                        raise TestFailure("User reported test failure")
+
+                    raise ValueError(f"Invalid user response: {user_response}")
+
+            raise TimeoutError("Timeout occurred while waiting for notification or user input")
+
+        finally:
+            # Make sure all tasks are cancelled
+            for task in [notification_task, user_input_task]:
+                if not task.done():
+                    task.cancel()
+                    with contextlib.suppress(TimeoutError, asyncio.CancelledError):
+                        await asyncio.wait_for(task, timeout=0.1)
+
     async def wait_for_notification_interactive(
         self,
         characteristic_uuid: str,
@@ -737,119 +963,8 @@ class TestContext:
             TestFailure: If the user chooses to fail the test
             TimeoutError: If no notification is received within the timeout
         """
-
-        async def user_input_handler() -> tuple[str, str] | None:
-            """Handle user input during the waiting period.
-
-            Returns:
-                Tuple of user response and message, or None if user input is cancelled
-            """
-            print("\nThe test will continue automatically when event is detected.")
-            print(
-                "If nothing happens, type 's' or 'skip' to skip, "
-                "'f' or 'fail' to fail the test, or 'd' for debug info.",
-            )
-
-            session = PromptSession()  # type: ignore
-            with patch_stdout():
-                while True:
-                    user_input = None
-                    try:
-                        user_input = await session.prompt_async()
-                    except (EOFError, KeyboardInterrupt):
-                        # Handle Ctrl+D and Ctrl+C gracefully
-                        user_input = "f"  # Treat as "fail" to abort the test
-                    except asyncio.CancelledError:
-                        # Task cancelled - exit cleanly
-                        logger.debug("User input task cancelled")
-                        break
-                    except Exception:
-                        logger.exception("Error in user input handler")
-                        break
-
-                    # Handle EOF or errors
-                    if not user_input:
-                        logger.info("Input stream closed or returned empty input")
-                        break
-
-                    user_input = user_input.strip().lower()
-
-                    # Process based on user input
-                    if user_input in ["s", "skip"]:
-                        return ("skip", "User chose to skip the test")
-                    if user_input in ["f", "fail"]:
-                        return ("fail", "User reported test failure")
-                    if user_input == "d":
-                        # Debug - show received notifications
-                        if characteristic_uuid not in self.notification_subscriptions:
-                            print(f"No subscription to {characteristic_uuid}")
-                            continue
-
-                        sub = self.notification_subscriptions[characteristic_uuid]
-                        if sub.waiter is None:
-                            print(f"No waiter for {characteristic_uuid}")
-                            continue
-
-                        if len(sub.waiter.received_notifications) == 0:
-                            print(f"No notifications received for {characteristic_uuid}")
-                            continue
-
-                        print(f"Received {len(sub.waiter.received_notifications)} notifications so far:")
-                        for i, n in enumerate(sub.waiter.received_notifications):
-                            print(f"  Notification {i + 1}: {n.hex() if n else 'None'}")
-                            is_match, _ = sub.waiter.check_notification(n)
-                            if is_match:
-                                print("  --> This notification MATCHES the expected criteria")
-                            else:
-                                print("  --> Does NOT match expected criteria")
-
-                        # Continue waiting - don't break the loop
-                    else:
-                        print("Invalid input. Type 's' to skip, 'f' to fail, or 'd' for debug info.")
-
-            return None
-
         waiter = await self.create_notification_waiter(characteristic_uuid, expected_value, False)
-
-        # Start user input handler
-        user_input_task = asyncio.create_task(user_input_handler())
-
-        # Create a task for monitoring the notification event
-        notification_task = asyncio.create_task(waiter.complete_event.wait())
-
-        try:
-            # Wait for the first of the tasks to complete or for timeout
-            done, pending = await asyncio.wait(
-                [notification_task, user_input_task],
-                timeout=timeout,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-            # Determine which task completed first
-            if notification_task in done:
-                logger.info("Notification task completed first")
-                return self.handle_notification_waiter_result(waiter, timeout)
-            if user_input_task in done:
-                # User input finished first
-                if result := user_input_task.result():
-                    user_response, message = result
-                    logger.info(f"User input task completed first: {message}")
-
-                # Raise appropriate exception based on user input
-                if user_response == "skip":
-                    raise TestSkip("User chose to skip test")
-                if user_response == "fail":
-                    raise TestFailure("User reported test failure")
-                raise ValueError(f"Invalid user response: {user_response}")
-
-            raise TimeoutError("Timeout occurred while waiting for notification or user input")
-        finally:
-            # Make sure all tasks are cancelled
-            for task in [notification_task, user_input_task]:
-                if not task.done():
-                    task.cancel()
-                    with contextlib.suppress(TimeoutError, asyncio.CancelledError):
-                        await asyncio.wait_for(task, timeout=0.1)
+        return await self._run_notification_wait_with_user_input(waiter, characteristic_uuid, timeout)
 
     def get_test_summary(self) -> dict[str, Any]:
         """Generate a summary of all test results.

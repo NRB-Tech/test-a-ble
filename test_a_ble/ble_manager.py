@@ -162,6 +162,86 @@ class BLEManager:
         logger.debug(f"Discovered {len(self.discovered_devices)} devices")
         return self.discovered_devices
 
+    async def _find_device_by_address(self, device_address: str) -> BLEDevice | None:
+        """Find a device by its address from discovered devices or by scanning.
+
+        Args:
+            device_address: Device address to find
+
+        Returns:
+            BLEDevice object if found, None otherwise
+        """
+        # Check in already discovered devices first
+        for device in self.discovered_devices:
+            if device.address == device_address:
+                return device
+
+        logger.debug(f"Device with address {device_address} not in discovered devices")
+
+        # On macOS, we need to scan for the device first
+        if sys.platform == "darwin":
+            devices = await self.discover_devices(timeout=5.0, address_filter=device_address)
+            if devices:
+                device = devices[0]
+                logger.debug(f"Found device: {device.name or 'Unknown'} ({device.address})")
+                return device
+            logger.error(f"Could not find device with address {device_address}")
+            return None
+
+        # Try to create a BLEDevice object directly for other platforms
+        try:
+            # For modern Bleak (0.19.0+), create a device with required parameters
+            return BLEDevice(address=device_address, name=None, details={}, rssi=0)
+        except Exception:
+            logger.exception("Failed to create BLEDevice")
+            logger.debug("Attempting to discover the device first...")
+
+            # Try to discover the device first
+            devices = await self.discover_devices(timeout=5.0, address_filter=device_address)
+            if devices:
+                device = devices[0]
+                logger.debug(f"Found device: {device.name or 'Unknown'} ({device.address})")
+                return device
+
+            logger.exception(f"Could not find device with address {device_address}")
+            return None
+
+    async def _attempt_connection(self, retry_count: int, retry_delay: float) -> bool:
+        """Attempt to connect to a device with retries.
+
+        Args:
+            retry_count: Number of connection attempts before failing
+            retry_delay: Delay between retries in seconds
+
+        Returns:
+            True if connection successful, False otherwise
+        """
+        if not self.device:
+            return False
+
+        logger.info(f"Connecting to {self.device.name or 'Unknown'} ({self.device.address})")
+
+        # Attempt connection with retries
+        for attempt in range(retry_count):
+            logger.debug(f"Connection attempt {attempt + 1}/{retry_count}")
+            # Create client with the device identifier
+            self.client = BleakClient(self.device)
+            try:
+                # Connect to the device
+                await self.client.connect()
+            except Exception:
+                logger.exception(f"Connection attempt {attempt + 1} failed")
+                if attempt < retry_count - 1:
+                    await asyncio.sleep(retry_delay)
+            else:
+                self.connected = True
+                logger.info(f"Connected to {self.device.name or 'Unknown'} ({self.device.address})")
+                return True
+
+        logger.error(f"Failed to connect to device after {retry_count} attempts")
+        self.device = None
+        return False
+
     async def connect_to_device(
         self,
         device_or_address: BLEDevice | str,
@@ -180,71 +260,15 @@ class BLEManager:
         """
         # Check if device_or_address is a string or a BLEDevice
         if isinstance(device_or_address, str):
-            # Look up device by address in discovered devices
-            device_address = device_or_address
-            for device in self.discovered_devices:
-                if device.address == device_address:
-                    self.device = device
-                    break
-
-            # If not found in discovered devices, handle special cases
+            # Look up device by address
+            self.device = await self._find_device_by_address(device_or_address)
             if not self.device:
-                logger.debug(f"Device with address {device_or_address} not in discovered devices")
-
-                # on macos, we have to scan for the device first
-                if sys.platform == "darwin":
-                    devices = await self.discover_devices(timeout=5.0, address_filter=device_or_address)
-                    if devices:
-                        self.device = devices[0]
-                        logger.debug(f"Found device: {self.device.name or 'Unknown'} ({self.device.address})")
-                    else:
-                        logger.error(f"Could not find device with address {device_or_address}")
-                        return False
-                else:
-                    try:
-                        # For modern Bleak (0.19.0+), create a device with required parameters
-                        self.device = BLEDevice(address=device_or_address, name=None, details={}, rssi=0)
-                    except Exception:
-                        logger.exception("Failed to create BLEDevice")
-                        logger.debug("Attempting to discover the device first...")
-
-                        # Try to discover the device first
-                        devices = await self.discover_devices(timeout=5.0, address_filter=device_or_address)
-
-                        if devices:
-                            self.device = devices[0]
-                            logger.debug(f"Found device: {self.device.name or 'Unknown'} ({self.device.address})")
-                        else:
-                            logger.exception(f"Could not find device with address {device_or_address}")
-                            self.device = None
-                            return False
+                return False
         else:
             self.device = device_or_address
 
-        logger.info(f"Connecting to {self.device.name or 'Unknown'} ({self.device.address})")
-
-        # Attempt connection with retries
-        for attempt in range(retry_count):
-            logger.debug(f"Connection attempt {attempt + 1}/{retry_count}")
-            # Create client with the device identifier
-            self.client = BleakClient(self.device)
-            try:
-                # Connect to the device
-                await self.client.connect()
-
-            except Exception:
-                logger.exception(f"Connection attempt {attempt + 1} failed")
-                if attempt < retry_count - 1:
-                    await asyncio.sleep(retry_delay)
-
-            else:
-                self.connected = True
-                logger.info(f"Connected to {self.device.name or 'Unknown'} ({self.device.address})")
-                return True
-
-        logger.error(f"Failed to connect to device after {retry_count} attempts")
-        self.device = None
-        return False
+        # Attempt to connect with retries
+        return await self._attempt_connection(retry_count, retry_delay)
 
     async def disconnect(self):
         """Disconnect from the connected device and clean up resources."""
@@ -354,6 +378,87 @@ class BLEManager:
         logger.debug(f"Read value: {value.hex()}")
         return value
 
+    async def _check_characteristic_readable(self, characteristic_uuid: str) -> bool:
+        """Check if a characteristic supports the read property.
+
+        Args:
+            characteristic_uuid: UUID of the characteristic to check
+
+        Returns:
+            True if the characteristic is readable, False otherwise
+        """
+        try:
+            # Get the services if not already cached
+            if not self.services and self.device:
+                await self.discover_services()
+
+            # Look for the characteristic in all services
+            for _service_uuid, service_info in self.services.get(
+                self.device.address if self.device else "", {}
+            ).items():
+                characteristics = service_info.get("characteristics", {})
+                if characteristic_uuid in characteristics:
+                    properties = characteristics[characteristic_uuid].get("properties", [])
+                    return "read" in properties
+        except Exception as e:
+            logger.debug(f"Error checking if characteristic is readable: {e!s}")
+            return False
+        else:
+            logger.debug(f"Characteristic {characteristic_uuid} not found in services")
+            return False
+
+    async def _read_before_write(self, characteristic_uuid: str, is_readable: bool) -> bytearray | None:
+        """Try to read the current value of a characteristic before writing.
+
+        Args:
+            characteristic_uuid: UUID of the characteristic to read
+            is_readable: Whether the characteristic supports reading
+
+        Returns:
+            Current value if successfully read, None otherwise
+        """
+        if not is_readable:
+            logger.debug("Skipping pre-write read - characteristic not readable")
+            return None
+
+        try:
+            current_value = await self.client.read_gatt_char(characteristic_uuid)
+            logger.debug(f"Current value before write: {current_value.hex()}")
+        except Exception as e:
+            logger.debug(f"Could not read characteristic before write despite being readable: {e!s}")
+            return None
+        else:
+            return current_value
+
+    async def _verify_write(
+        self, characteristic_uuid: str, data: bytes | bytearray | memoryview, is_readable: bool
+    ) -> None:
+        """Verify a write operation by reading back the value.
+
+        Args:
+            characteristic_uuid: UUID of the characteristic to verify
+            data: Data that was written
+            is_readable: Whether the characteristic supports reading
+        """
+        if not is_readable:
+            logger.debug("Skipping write verification - characteristic not readable")
+            return
+
+        try:
+            # Small delay to allow the device to process the write
+            await asyncio.sleep(0.1)
+
+            # Read back the value to verify
+            new_value = await self.client.read_gatt_char(characteristic_uuid)
+
+            # Check if the value matches what we wrote
+            if new_value == data:
+                logger.debug(f"Write verified: {new_value.hex()}")
+            else:
+                logger.warning(f"Write verification failed. Expected: {data.hex()}, Got: {new_value.hex()}")
+        except Exception as e:
+            logger.debug(f"Could not verify write: {e!s}")
+
     async def write_characteristic(
         self,
         characteristic_uuid: str,
@@ -373,58 +478,20 @@ class BLEManager:
         logger.debug(f"Writing to characteristic {characteristic_uuid}: {data.hex()}")
 
         # Check if the characteristic is readable before trying to read it
-        is_readable = False
-        try:
-            # Get the services if not already cached
-            if not self.services:
-                await self.discover_services()
-
-            # Look for the characteristic in all services
-            for _service_uuid, service_info in self.services.get(self.device.address, {}).items():
-                characteristics = service_info.get("characteristics", {})
-                if characteristic_uuid in characteristics:
-                    properties = characteristics[characteristic_uuid].get("properties", [])
-                    is_readable = "read" in properties
-                    break
-
-            logger.debug(f"Characteristic {characteristic_uuid} is readable: {is_readable}")
-        except Exception as e:
-            logger.debug(f"Error checking if characteristic is readable: {e!s}")
-            is_readable = False
+        is_readable = await self._check_characteristic_readable(characteristic_uuid)
+        logger.debug(f"Characteristic {characteristic_uuid} is readable: {is_readable}")
 
         try:
-            # Try to get current value before writing (if characteristic supports reading)
-            if is_readable:
-                try:
-                    current_value = await self.client.read_gatt_char(characteristic_uuid)
-                    logger.debug(f"Current value before write: {current_value.hex()}")
-                except Exception as e:
-                    logger.debug(f"Could not read characteristic before write despite being readable: {e!s}")
-            else:
-                logger.debug("Skipping pre-write read - characteristic not readable")
+            # Try to read current value before writing
+            await self._read_before_write(characteristic_uuid, is_readable)
 
             # Write the new value
             await self.client.write_gatt_char(characteristic_uuid, data, response)
             logger.debug(f"Write command sent for {characteristic_uuid}")
 
             # Verify the write was successful if response is True and characteristic is readable
-            if response and is_readable:
-                try:
-                    # Small delay to allow the device to process the write
-                    await asyncio.sleep(0.1)
-
-                    # Read back the value to verify
-                    new_value = await self.client.read_gatt_char(characteristic_uuid)
-
-                    # Check if the value matches what we wrote
-                    if new_value == data:
-                        logger.debug(f"Write verified: {new_value.hex()}")
-                    else:
-                        logger.warning(f"Write verification failed. Expected: {data.hex()}, Got: {new_value.hex()}")
-                except Exception as e:
-                    logger.debug(f"Could not verify write: {e!s}")
-            elif not is_readable:
-                logger.debug("Skipping write verification - characteristic not readable")
+            if response:
+                await self._verify_write(characteristic_uuid, data, is_readable)
 
             logger.debug("Write operation completed")
         except Exception:

@@ -10,7 +10,6 @@ import importlib.util
 import inspect
 import logging
 import os
-import re
 import sys
 import traceback
 from collections.abc import Callable, Coroutine
@@ -237,28 +236,20 @@ def _import_module_from_file(import_name: str, file_path: Path) -> Any:
     return module
 
 
-def _find_tests_in_module(
-    package_dir: Path | None,
-    import_name: str,
-    test_dir: Path,
-    test_file: str,
-    method_or_wildcard: str | None = None,
-) -> list[TestNameItem]:
-    """Find tests in the given module.
+def _import_test_module(package_dir: Path | None, import_name: str, file_path: Path) -> Any:
+    """Import a test module.
 
     Args:
         package_dir: Directory of the package
         import_name: Import name of the module
-        test_dir: Directory of the test
-        test_file: File to find tests in
-        method_or_wildcard: Method name or wildcard of the tests to find
+        file_path: Path to the module file
 
     Returns:
-        List of tuples (test_name, test_item) where test_item is a test function or (class, method) tuple
-    """
-    file_path = test_dir / test_file
+        The imported module
 
-    # Import the module
+    Raises:
+        ImportError: If the module cannot be imported
+    """
     try:
         if package_dir is not None:
             # Standard package import
@@ -281,11 +272,20 @@ def _find_tests_in_module(
         logger.debug(f"Exception details: {traceback.format_exc()}")
         raise
 
-    # Use the relative path from test_dir as the module prefix for test names
-    rel_path = file_path.relative_to(test_dir)
-    rel_module = rel_path.with_suffix("").as_posix().replace(os.path.sep, ".")
+    return module
 
-    # First, discover test classes
+
+def _find_test_classes(module: Any, rel_module: str, method_or_wildcard: str | None) -> list[tuple]:
+    """Find test classes in a module.
+
+    Args:
+        module: The module to search
+        rel_module: The relative module path
+        method_or_wildcard: Method name pattern to match
+
+    Returns:
+        List of test class details (sorted by line number)
+    """
     class_tests = []
     for class_name, class_obj in module.__dict__.items():
         # Check if it's a class and follows naming convention
@@ -297,47 +297,78 @@ def _find_tests_in_module(
             logger.debug(f"Discovered test class: {class_full_name}")
 
             # Discover test methods in the class and collect with source line numbers
-            class_method_tests = []
-            for method_name, method_obj in inspect.getmembers(class_obj, predicate=inspect.isfunction):
-                if not _check_wildcard_match(method_or_wildcard, method_name):
-                    continue
-
-                # Check if the method is a test method
-                is_test = (hasattr(method_obj, "_is_ble_test") and method_obj._is_ble_test) or method_name.startswith(
-                    "test_",
-                )
-
-                if is_test:
-                    # Check if the method is a coroutine function
-                    if asyncio.iscoroutinefunction(method_obj) or inspect.iscoroutinefunction(method_obj):
-                        test_name = f"{class_full_name}.{method_name}"
-
-                        # Get line number for sorting
-                        line_number = inspect.getsourcelines(method_obj)[1]
-
-                        # Store tuple of (test_name, class_name, class_obj, method, line_number)
-                        class_method_tests.append(
-                            (
-                                test_name,
-                                class_full_name,
-                                class_obj,
-                                method_obj,
-                                line_number,
-                            ),
-                        )
-                        logger.debug(f"Discovered class test method: {test_name} at line {line_number}")
-                    else:
-                        logger.warning(
-                            f"Method {method_name} in class {class_full_name} is not a coroutine function, skipping",
-                        )
-
-            # Sort class methods by line number to preserve definition order
-            class_method_tests.sort(key=lambda x: x[4])
+            class_method_tests = _find_test_methods_in_class(class_obj, class_full_name, method_or_wildcard)
 
             # Add sorted methods to class_tests
             class_tests.extend(class_method_tests)
 
-    # Then, discover standalone test functions
+    return class_tests
+
+
+def _find_test_methods_in_class(class_obj: Any, class_full_name: str, method_or_wildcard: str | None) -> list[tuple]:
+    """Find test methods in a class.
+
+    Args:
+        class_obj: The class to search
+        class_full_name: Full name of the class
+        method_or_wildcard: Method name pattern to match
+
+    Returns:
+        List of test method details (sorted by line number)
+    """
+    class_method_tests = []
+    for method_name, method_obj in inspect.getmembers(class_obj, predicate=inspect.isfunction):
+        if not _check_wildcard_match(method_or_wildcard, method_name):
+            continue
+
+        # Check if the method is a test method
+        is_test = (hasattr(method_obj, "_is_ble_test") and method_obj._is_ble_test) or method_name.startswith(
+            "test_",
+        )
+
+        if is_test:
+            # Check if the method is a coroutine function
+            if asyncio.iscoroutinefunction(method_obj) or inspect.iscoroutinefunction(method_obj):
+                test_name = f"{class_full_name}.{method_name}"
+
+                # Get line number for sorting
+                line_number = inspect.getsourcelines(method_obj)[1]
+
+                # Store tuple of (test_name, class_name, class_obj, method, line_number)
+                class_method_tests.append(
+                    (
+                        test_name,
+                        class_full_name,
+                        class_obj,
+                        method_obj,
+                        line_number,
+                    ),
+                )
+                logger.debug(f"Discovered class test method: {test_name} at line {line_number}")
+            else:
+                logger.warning(
+                    f"Method {method_name} in class {class_full_name} is not a coroutine function, skipping",
+                )
+
+    # Sort class methods by line number to preserve definition order
+    class_method_tests.sort(key=lambda x: x[4])
+    return class_method_tests
+
+
+def _find_standalone_test_functions(
+    module: Any, rel_module: str, method_or_wildcard: str | None, class_tests: list[tuple]
+) -> list[tuple]:
+    """Find standalone test functions in a module.
+
+    Args:
+        module: The module to search
+        rel_module: The relative module path
+        method_or_wildcard: Method name pattern to match
+        class_tests: Already discovered class tests to avoid duplicates
+
+    Returns:
+        List of test function details (sorted by line number)
+    """
     function_tests = []
     for name, obj in module.__dict__.items():
         if not _check_wildcard_match(method_or_wildcard, name):
@@ -348,7 +379,7 @@ def _find_tests_in_module(
 
         if is_test and callable(obj) and not inspect.isclass(obj):
             # Don't process methods that belong to test classes (already handled)
-            if any(t[2] == obj for t in class_tests):
+            if any(t[3] == obj for t in class_tests):
                 continue
 
             # Check if the function is a coroutine function
@@ -362,12 +393,50 @@ def _find_tests_in_module(
                 function_tests.append((test_name, obj, line_number))
                 logger.debug(f"Discovered standalone test: {test_name} at line {line_number}")
             else:
-                logger.warning(f"Function {name} in {file_path} is not a coroutine function, skipping")
+                logger.warning(f"Function {name} in {rel_module} is not a coroutine function, skipping")
 
     # Sort standalone functions by line number
     function_tests.sort(key=lambda x: x[2])
+    return function_tests
 
+
+def _find_tests_in_module(
+    package_dir: Path | None,
+    import_name: str,
+    test_dir: Path,
+    test_file: str,
+    method_or_wildcard: str | None = None,
+) -> list[TestNameItem]:
+    """Find tests in the given module.
+
+    Args:
+        package_dir: Directory of the package
+        import_name: Import name of the module
+        test_dir: Directory of the test
+        test_file: File to find tests in
+        method_or_wildcard: Method name or wildcard of the tests to find
+
+    Returns:
+        List of tuples (test_name, test_item) where test_item is a test function or (class, method) tuple
+    """
+    file_path = test_dir / test_file
+
+    # Import the module
+    module = _import_test_module(package_dir, import_name, file_path)
+
+    # Use the relative path from test_dir as the module prefix for test names
+    rel_path = file_path.relative_to(test_dir)
+    rel_module = rel_path.with_suffix("").as_posix().replace(os.path.sep, ".")
+
+    # First, discover test classes
+    class_tests = _find_test_classes(module, rel_module, method_or_wildcard)
+
+    # Then, discover standalone test functions
+    function_tests = _find_standalone_test_functions(module, rel_module, method_or_wildcard, class_tests)
+
+    # Combine class tests and function tests in correct order
     tests: list[tuple[str, TestItem]] = []
+
     # Add class tests to the order list first
     for test_name, class_name, class_obj, method_obj, _ in class_tests:
         tests.append((test_name, (class_name, class_obj, method_obj)))
@@ -429,107 +498,389 @@ def _find_tests_in_file(
     )
 
 
-def discover_tests_from_specifier(test_specifier: str) -> list[tuple[str, list[TestNameItem]]]:
-    """Parse a test specifier.
+def _split_components(path_component: str) -> tuple[str | None, str | None]:
+    """Split a path component into file and method components.
 
     Args:
-        test_specifier: Test specifier
+        path_component: Path component to split
 
     Returns:
-        List of tuples (module_name, test_items) where test_items is a list of tuples (test_name, test_item) where
-        test_item is a test function or (class, method) tuple
+        Tuple of (file, method)
     """
-    tests: list[tuple[str, list[TestNameItem]]] = []
-    # Split the specifier by both '.' and '/' or '\' to handle different path formats
-    path_parts = re.split(r"[./\\]", test_specifier)
-    starts_with_slash = test_specifier[0] if test_specifier.startswith("/") or test_specifier.startswith("\\") else ""
+    # If it contains a dot, it could be file.method
+    if "." in path_component:
+        parts = path_component.split(".")
+        # File name and method name
+        if len(parts) == 2:  # noqa: PLR2004
+            return parts[0], parts[1]
+        # Multiple dots - treat as file with extension
+        return path_component, None
+    # No dot: a file without extension
+    return path_component, None
 
-    # If the specifier is empty after splitting, skip it
-    if not path_parts or all(not part for part in path_parts):
-        logger.warning(f"Warning: Empty specifier after splitting: '{test_specifier}'")
-        return tests
 
-    # Check if the last path part contains a wildcard
-    wildcard = None
-    if path_parts and "*" in path_parts[-1]:
-        wildcard = path_parts[-1]
-        path_parts = path_parts[:-1]
-        logger.debug(f"Extracted wildcard '{wildcard}' from path parts")
+def _parse_test_specifier(specifier: str) -> tuple[str | None, str | None, str | None]:
+    """Parse a test specifier into directory, file, and method components.
 
-    test_dir = None
-    test_file = None
-    test_method = None
+    Args:
+        specifier: The test specifier string
 
-    for i in range(min(3, len(path_parts))):
-        # create a possible path from the path_parts
-        possible_path = Path(*path_parts[:-i]) if i > 0 else Path(*path_parts)
-        logger.debug(f"possible_path {i}: {possible_path}")
-        if starts_with_slash:
-            possible_path = Path(starts_with_slash + str(possible_path))
-        if possible_path.is_dir():
-            test_dir = possible_path
-            if i > 1:
-                test_file = path_parts[-i]
-                test_method = path_parts[-i + 1]
-            elif i > 0:
-                test_file = path_parts[-i]
-                test_method = None
+    Returns:
+        A tuple of (directory, file, method) components
+    """
+    # Start with empty components
+    directory = file = method = None
+
+    # Split the specifier by path separators
+    path_components = specifier.split("/")
+    component_count = len(path_components)
+
+    # Single component: method, file, or directory
+    if component_count == 1:
+        if "." in path_components[0]:
+            file, method = _split_components(path_components[0])
+        else:
+            directory = path_components[0]
+
+    # Two components: directory/file or directory/file.method
+    elif component_count == 2:  # noqa: PLR2004
+        directory = path_components[0]
+        file, method = _split_components(path_components[1])
+
+    # Three or more components: directory/[subdirs]/file or directory/[subdirs]/file.method
+    else:
+        # Convert to Path and join all components except the last one
+        directory = str(Path(*path_components[:-1]))
+        file, method = _split_components(path_components[-1])
+
+    # Handle wildcards
+    if file and "*" in file:
+        # If a wildcard is in the filename, set directory to include the file part
+        directory = str(Path(directory) / file) if directory else file
+        file = None
+
+    return directory, file, method
+
+
+def _find_test_dir(test_dir: str | None, cwd: Path) -> Path:
+    """Find the test directory.
+
+    Args:
+        test_dir: Optional test directory specified
+        cwd: Current working directory
+
+    Returns:
+        Path to the test directory
+    """
+    if test_dir:
+        return Path(test_dir)
+    # Default to current directory if not specified
+    return cwd
+
+
+def _add_test_directory(
+    directory_path: Path, package_dirs: list[Path], test_dirs: list[Path], search_dirs: list[Path]
+) -> None:
+    """Add a directory to the search directories if it exists.
+
+    Args:
+        directory_path: Path to the directory
+        package_dirs: List of package directories to update
+        test_dirs: List of test directories to update
+        search_dirs: List of search directories to update
+    """
+    if directory_path.exists() and directory_path.is_dir():
+        if (directory_path / "__init__.py").exists():
+            package_dirs.append(directory_path)
+        test_dirs.append(directory_path)
+        search_dirs.append(directory_path)
+
+
+def _find_matching_directories(
+    base_dir: Path, pattern: str, package_dirs: list[Path], test_dirs: list[Path], search_dirs: list[Path]
+) -> None:
+    """Find directories matching a pattern and add them to the search directories.
+
+    Args:
+        base_dir: Base directory to search from
+        pattern: Pattern to match
+        package_dirs: List of package directories to update
+        test_dirs: List of test directories to update
+        search_dirs: List of search directories to update
+    """
+    if "*" in pattern:
+        for found_dir in base_dir.glob(pattern):
+            if found_dir.is_dir():
+                _add_test_directory(found_dir, package_dirs, test_dirs, search_dirs)
+
+
+def _handle_package_directory(
+    test_dir: Path, directory: str | None, package_dirs: list[Path], test_dirs: list[Path], search_dirs: list[Path]
+) -> None:
+    """Handle directory search in a package.
+
+    Args:
+        test_dir: Base test directory
+        directory: Directory to search in (or None for root)
+        package_dirs: List of package directories to update
+        test_dirs: List of test directories to update
+        search_dirs: List of search directories to update
+    """
+    # We are in a package, add it as a package directory
+    package_dirs.append(test_dir)
+
+    # If a directory is specified, use it as a subdirectory within the package
+    if directory:
+        subdir = test_dir / directory
+        _add_test_directory(subdir, package_dirs, test_dirs, search_dirs)
+
+        # If not found, try using glob to match directories
+        if not (subdir.exists() and subdir.is_dir()):
+            _find_matching_directories(test_dir, directory, package_dirs, test_dirs, search_dirs)
+            logger.debug(f"Directory {directory} not found or not a directory")
+    else:
+        # No directory specified, use the package root
+        test_dirs.append(test_dir)
+        search_dirs.append(test_dir)
+
+
+def _handle_non_package_directory(
+    test_dir: Path, directory: str | None, test_dirs: list[Path], search_dirs: list[Path]
+) -> None:
+    """Handle directory search in a non-package.
+
+    Args:
+        test_dir: Base test directory
+        directory: Directory to search in (or None for root)
+        test_dirs: List of test directories to update
+        search_dirs: List of search directories to update
+    """
+    if directory:
+        subdir = test_dir / directory
+        if subdir.exists() and subdir.is_dir():
+            test_dirs.append(subdir)
+            search_dirs.append(subdir)
+        else:
+            # If not found, try using glob to match directories
+            if "*" in directory:
+                for found_dir in test_dir.glob(directory):
+                    if found_dir.is_dir():
+                        test_dirs.append(found_dir)
+                        search_dirs.append(found_dir)
+            logger.debug(f"Directory {directory} not found or not a directory")
+    else:
+        # No directory specified, use test_dir
+        test_dirs.append(test_dir)
+        search_dirs.append(test_dir)
+
+
+def _find_test_packages(directory: str | None, test_dir: Path) -> tuple[list[Path], list[Path], list[Path]]:
+    """Find test packages in the specified directory.
+
+    Args:
+        directory: Directory to search in (or None for root)
+        test_dir: Base test directory
+
+    Returns:
+        Tuple of (package_dirs, test_dirs, search_dirs)
+    """
+    # Find all directories containing __init__.py files (packages)
+    package_dirs = []
+    test_dirs = []
+    search_dirs = []
+
+    # Check if we're in a Python package (has __init__.py)
+    if (test_dir / "__init__.py").exists():
+        _handle_package_directory(test_dir, directory, package_dirs, test_dirs, search_dirs)
+    else:
+        # Not in a package, treat as a regular directory
+        _handle_non_package_directory(test_dir, directory, test_dirs, search_dirs)
+
+    return package_dirs, test_dirs, search_dirs
+
+
+def _find_test_files(file: str | None, search_dirs: list[Path]) -> list[tuple[Path, str]]:
+    """Find test files in the search directories.
+
+    Args:
+        file: File pattern to search for (or None for all)
+        search_dirs: Directories to search in
+
+    Returns:
+        List of tuples (test_dir, test_file)
+    """
+    test_file_paths = []
+
+    # For each test directory, find matching test files
+    for test_dir in search_dirs:
+        if file:
+            # A file pattern was specified
+            if "*" in file:
+                # Handle wildcards in the file pattern
+                for matched_file in test_dir.glob(file):
+                    if matched_file.is_file() and matched_file.suffix == ".py":
+                        rel_path = matched_file.relative_to(test_dir)
+                        test_file_paths.append((test_dir, str(rel_path)))
             else:
-                test_file = None
-                test_method = None
-            break
-        tmp_dir = possible_path.parent
-        tmp_file = possible_path.name
-        if result := _check_if_file_exists(tmp_dir, tmp_file):
-            test_dir, test_file = result
-            logger.debug(f"Found test_dir: {test_dir}, test_file: {test_file}")
-            test_method = path_parts[-i] if i > 0 else None
-            break
-    if test_dir is None:
-        # Not found a dir yet, so specifier is not dir or file in current directory
-        test_dir = Path.cwd()
-        test_file = None
-        if test_specifier == "all":
-            logger.debug(f"Finding all tests in {test_dir}")
-        elif len(path_parts) > 0 and (result := _check_if_file_exists(test_dir, path_parts[-1])):
-            test_dir, test_file = result
-            logger.debug(f"Found test_dir: {test_dir}, test_file: {test_file}")
+                # Specific file (with or without .py extension)
+                file_with_ext = file if file.endswith(".py") else f"{file}.py"
+                file_path = test_dir / file_with_ext
+                if file_path.exists() and file_path.is_file():
+                    test_file_paths.append((test_dir, file_with_ext))
+                else:
+                    logger.debug(f"File {file_path} not found")
+        else:
+            # No file specified, find all Python files that match naming patterns
+            for py_file in test_dir.glob("*.py"):
+                if py_file.name.startswith("test_") or py_file.name.endswith("_test.py"):
+                    rel_path = py_file.relative_to(test_dir)
+                    test_file_paths.append((test_dir, str(rel_path)))
 
-    logger.debug(f"test_dir: {test_dir}, test_file: {test_file}, test_method: {test_method}")
+    if not test_file_paths:
+        # No test files found
+        file_desc = f" matching '{file}'" if file else ""
+        logger.info(f"No test files{file_desc} found in {[str(d) for d in search_dirs]}")
 
-    if test_file is None:  # find all files in test_dir
-        test_file_wildcard = wildcard if test_method is None else None
-        test_files = _find_files_matching_wildcard(test_dir, test_file_wildcard or "test_*")
-        if not test_files:
-            if (test_dir / "tests").is_dir():
-                test_dir = test_dir / "tests"
-                test_files = _find_files_matching_wildcard(test_dir, test_file_wildcard or "test_*")
-            if not test_files:
-                test_files = _find_files_matching_wildcard(test_dir, "test_*")
-                if not test_files:
-                    raise NoTestFilesFoundError()
-                test_method = wildcard
-                test_file_wildcard = None
-        if test_file_wildcard is not None:
-            # do not reuse wildcard for method search
-            wildcard = None
-    else:
-        test_files = [test_file]
+    return test_file_paths
 
-    if test_method is None and wildcard is not None:
-        test_method = wildcard
 
-    logger.debug(f"Discovering tests in test_dir: {test_dir}, test_file: {test_file}, test_method: {test_method}")
-    if pkg_result := find_and_import_nearest_package(test_dir):
-        package_name, package_dir = pkg_result
-    else:
-        package_dir = None
+def _find_closest_package_dir(test_dir: Path, package_dirs: list[Path]) -> Path | None:
+    """Find the closest package directory that contains the test directory.
 
-    for test_file in test_files:
-        module_name = Path(test_file).stem
-        module_tests = _find_tests_in_file(package_dir, test_dir, test_file, test_method)
-        tests.append((module_name, module_tests))
+    Args:
+        test_dir: The test directory
+        package_dirs: List of package directories
 
-    tests.sort(key=lambda x: x[0])
+    Returns:
+        The closest package directory or None
+    """
+    closest_package = None
+    for pkg_dir in package_dirs:
+        # Find the package directory that is a parent of this test file
+        if test_dir.is_relative_to(pkg_dir) and (
+            closest_package is None
+            or len(test_dir.relative_to(pkg_dir).parts) < len(test_dir.relative_to(closest_package).parts)
+        ):
+            closest_package = pkg_dir
+    return closest_package
 
-    return tests
+
+def _create_import_name(test_dir: Path, rel_path: Path, closest_package: Path | None) -> tuple[str, Path | None]:
+    """Create an import name for a test file.
+
+    Args:
+        test_dir: The test directory
+        rel_path: Relative path of the test file
+        closest_package: The closest package directory
+
+    Returns:
+        Tuple of (import_name, package_dir)
+    """
+    if closest_package:
+        # Create the import path based on the package structure
+        rel_to_pkg = test_dir.relative_to(closest_package)
+        pkg_parts = []
+
+        # Add the package name (directory containing closest __init__.py)
+        if closest_package.name:
+            pkg_parts.append(closest_package.name)
+
+        # Add subdirectory components
+        if rel_to_pkg.parts:
+            pkg_parts.extend(rel_to_pkg.parts)
+
+        # Add the module name (file without .py)
+        module_name = rel_path.with_suffix("").as_posix()
+        pkg_parts.append(module_name)
+
+        import_name = ".".join(pkg_parts)
+        logger.debug(f"Using package import: {import_name}")
+        return import_name, closest_package
+
+    # Not in a package, use direct file import
+    import_name = rel_path.with_suffix("").as_posix().replace(os.path.sep, ".")
+    logger.debug(f"Using file import (no package): {import_name}")
+    return import_name, None
+
+
+def _process_test_files(
+    test_file_paths: list[tuple[Path, str]], package_dirs: list[Path], method: str | None
+) -> list[tuple[str, TestItem]]:
+    """Process test files to find tests.
+
+    Args:
+        test_file_paths: List of (test_dir, test_file) tuples
+        package_dirs: List of package directories
+        method: Method name or wildcard
+
+    Returns:
+        List of discovered tests
+    """
+    discovered_tests = []
+
+    for test_dir, test_file in test_file_paths:
+        rel_path = Path(test_file)
+
+        # Determine import name
+        if package_dirs:
+            # Find the closest package directory
+            closest_package = _find_closest_package_dir(test_dir, package_dirs)
+            import_name, package_dir = _create_import_name(test_dir, rel_path, closest_package)
+        else:
+            # Not in a package, use direct file import
+            import_name = rel_path.with_suffix("").as_posix().replace(os.path.sep, ".")
+            logger.debug(f"Using file import (no package): {import_name}")
+            package_dir = None
+
+        # Find tests in this module
+        try:
+            tests = _find_tests_in_module(package_dir, import_name, test_dir, test_file, method)
+            discovered_tests.extend(tests)
+        except Exception:
+            logger.exception(f"Error discovering tests in {test_file}")
+
+    return discovered_tests
+
+
+def discover_tests_from_specifier(specifier: str | None, test_dir: str | None = None) -> list[tuple[str, TestItem]]:
+    """Discover tests from a test specifier.
+
+    Args:
+        specifier: Test specifier string in the format [path/]file[.method]
+        test_dir: Base directory for tests
+
+    Returns:
+        List of (test_name, test_item) tuples
+    """
+    cwd = Path.cwd()
+
+    # Parse the specifier to determine directory, file, and method components
+    directory = file = method = None
+
+    if specifier:
+        directory, file, method = _parse_test_specifier(specifier)
+
+    # Find the test directory
+    test_dir_path = _find_test_dir(test_dir, cwd)
+    logger.debug(f"Test directory: {test_dir_path}")
+    logger.debug(f"Looking for tests with: directory='{directory}', file='{file}', method='{method}'")
+
+    # Find package directories and test directories
+    package_dirs, test_dirs, search_dirs = _find_test_packages(directory, test_dir_path)
+
+    if not search_dirs:
+        logger.warning(f"No valid test directories found for '{directory or '.'}'")
+        raise NoTestFilesFoundError(f"No valid test directories found for '{directory or '.'}'")
+
+    # Find test files
+    test_file_paths = _find_test_files(file, search_dirs)
+
+    if not test_file_paths:
+        raise NoTestFilesFoundError(f"No test files matching '{file or '*'}' found in {search_dirs}")
+
+    # Process test files and discover tests
+    discovered_tests = _process_test_files(test_file_paths, package_dirs, method)
+
+    # Sort by module name for consistent order
+    discovered_tests.sort(key=lambda x: x[0])
+    return discovered_tests
