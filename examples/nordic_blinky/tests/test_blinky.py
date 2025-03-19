@@ -6,7 +6,7 @@ These tests demonstrate controlling the LED and receiving button state notificat
 
 import asyncio
 
-from config import (
+from nordic_blinky.config import (
     BUTTON_PRESSED,
     BUTTON_RELEASED,
     CHAR_BUTTON,
