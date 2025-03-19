@@ -288,10 +288,14 @@ def test_import_package_with_base_package(
     expected_init_path = package_dir / "__init__.py"
 
     # Test with base package
-    with patch.dict("sys.modules", {}, clear=True):
-        result = _import_package(package_dir, "base.package")
-        assert result == "base.package.my_test_package"
-        mock_spec_from_file.assert_called_with("base.package.my_test_package", expected_init_path)
+    package_name = "base.package.my_test_package"
+    if package_name in sys.modules:
+        del sys.modules[package_name]
+
+    result = _import_package(package_dir, "base.package")
+    assert result == package_name
+    assert package_name in sys.modules
+    mock_spec_from_file.assert_called_with(package_name, expected_init_path)
 
 
 @patch("importlib.util.spec_from_file_location")
@@ -323,10 +327,14 @@ def test_import_package_without_base_package(
     expected_init_path = package_dir / "__init__.py"
 
     # Test without base package
-    with patch.dict("sys.modules", {}, clear=True):
-        result = _import_package(package_dir)
-        assert result == "my_test_package"
-        mock_spec_from_file.assert_called_with("my_test_package", expected_init_path)
+    package_name = "my_test_package"
+    if package_name in sys.modules:
+        del sys.modules[package_name]
+
+    result = _import_package(package_dir)
+    assert result == package_name
+    assert package_name in sys.modules
+    mock_spec_from_file.assert_called_with(package_name, expected_init_path)
 
 
 @patch("pathlib.Path")

@@ -76,6 +76,10 @@ async def test_connect_to_device():
 @pytest.mark.asyncio
 async def test_connect_to_device_not_found():
     """Test connecting to a device that's not in discovered devices."""
+    import sys
+
+    from bleak.backends.device import BLEDevice
+
     from test_a_ble.ble_manager import BLEManager
 
     # Create manager instance
@@ -86,13 +90,27 @@ async def test_connect_to_device_not_found():
     with patch.object(manager, "discover_devices", new_callable=AsyncMock) as mock_discover:
         mock_discover.return_value = []
 
-        # Call connect_to_device with a non-existent address
-        result = await manager.connect_to_device("00:11:22:33:44:55")
+        # Create platform-specific device details
+        if sys.platform == "linux":
+            details = {"path": "/org/bluez/hci0/dev_00_11_22_33_44_55"}
+        else:
+            details = {}
 
-        # Assert
-        assert result is False
-        assert manager.device is None
-        assert manager.connected is False
+        # Mock BLEDevice creation
+        with patch("test_a_ble.ble_manager.BLEDevice") as mock_ble_device:
+            mock_device = MagicMock(spec=BLEDevice)
+            mock_device.address = "00:11:22:33:44:55"
+            mock_device.name = None
+            mock_device.details = details
+            mock_ble_device.return_value = mock_device
+
+            # Call connect_to_device with a non-existent address
+            result = await manager.connect_to_device("00:11:22:33:44:55")
+
+            # Assert
+            assert result is False
+            assert manager.device is None
+            assert manager.connected is False
 
 
 @pytest.mark.asyncio
