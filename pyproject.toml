@@ -101,12 +101,13 @@ select = [
 ignore = [
     "T201", # ignore print usage
     "TRY003", # ignore long messages when raising exceptions
+    "COM812", # ignore trailing commas as it conflicts with the ruff formatter
 
     # for now, ignore complexity warnings
-    "C901",
-    "PLR0911",
-    "PLR0912",
-    "PLR0915",
+    # "C901",
+    # "PLR0911",
+    # "PLR0912",
+    # "PLR0915",
 
 ]
 

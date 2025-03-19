@@ -84,7 +84,8 @@ def _import_package(package_path: Path, base_package: str = "") -> str:
         # Import the package
         spec = importlib.util.spec_from_file_location(full_package_name, init_path)
         if not spec or not spec.loader:
-            raise ImportError(f"Failed to load module spec for {init_path}")
+            # Use a function to abstract the raise
+            _raise_import_error(f"Failed to load module spec for {init_path}")
 
         module = importlib.util.module_from_spec(spec)
         sys.modules[full_package_name] = module
@@ -96,6 +97,18 @@ def _import_package(package_path: Path, base_package: str = "") -> str:
         raise ImportError(f"Error importing package {full_package_name}") from e
     else:
         return full_package_name
+
+
+def _raise_import_error(message: str) -> None:
+    """Raise an ImportError with the given message.
+
+    Args:
+        message: Error message
+
+    Raises:
+        ImportError: Always raised with the provided message
+    """
+    raise ImportError(message)
 
 
 def find_and_import_nearest_package(path: Path) -> tuple[str, Path] | None:
@@ -182,12 +195,46 @@ def _find_files_matching_wildcard(test_dir: Path, test_file_wildcard: str | None
     """
     if not test_dir.is_dir():
         return []
+
     # list files in test_dir that match the wildcard
     files = []
-    for file in os.listdir(test_dir):
-        if file.endswith(".py") and _check_wildcard_match(test_file_wildcard, file):
-            files.append(file)
+    for file_path in test_dir.iterdir():
+        if (
+            file_path.is_file()
+            and file_path.name.endswith(".py")
+            and _check_wildcard_match(test_file_wildcard, file_path.name)
+        ):
+            files.append(file_path.name)
     return files
+
+
+def _import_module_from_file(import_name: str, file_path: Path) -> Any:
+    """Import a module from a file path.
+
+    Args:
+        import_name: Name to use for the imported module
+        file_path: Path to the file to import
+
+    Returns:
+        The imported module
+
+    Raises:
+        ImportError: If the module cannot be imported
+    """
+    spec = importlib.util.spec_from_file_location(import_name, file_path)
+
+    if not spec or not spec.loader:
+        raise ImportError(f"Failed to load module spec for {file_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    # Add the module to sys.modules to allow relative imports
+    sys.modules[import_name] = module
+
+    # Execute the module
+    spec.loader.exec_module(module)
+    logger.debug(f"Imported {import_name} using spec_from_file_location")
+
+    return module
 
 
 def _find_tests_in_module(
@@ -210,32 +257,20 @@ def _find_tests_in_module(
         List of tuples (test_name, test_item) where test_item is a test function or (class, method) tuple
     """
     file_path = test_dir / test_file
+
+    # Import the module
     try:
-        # Try to import the module using importlib.import_module first
-        try:
-            if package_dir is not None:
-                # If we have a module, try to use standard import
+        if package_dir is not None:
+            # Standard package import
+            try:
                 module = importlib.import_module(import_name)
                 logger.debug(f"Imported {import_name} using import_module")
-            else:
-                # No module structure, use direct file import
-                raise ImportError("Not in a package, using spec_from_file_location")
-
-        except ImportError:
-            # Fallback to the file-based import method
-            spec = importlib.util.spec_from_file_location(import_name, file_path)
-
-            if not spec or not spec.loader:
-                raise ImportError(f"Failed to load module spec for {file_path}")
-
-            module = importlib.util.module_from_spec(spec)
-            # Add the module to sys.modules to allow relative imports
-            sys.modules[import_name] = module
-
-            # Execute the module
-            spec.loader.exec_module(module)
-            logger.debug(f"Imported {import_name} using spec_from_file_location")
-
+            except ImportError:
+                # Fall back to file-based import
+                module = _import_module_from_file(import_name, file_path)
+        else:
+            # Direct file import (no package)
+            module = _import_module_from_file(import_name, file_path)
     except ImportError:
         logger.exception(f"Import error loading module {import_name}")
         logger.info(f"File path: {file_path}")
