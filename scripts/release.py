@@ -140,6 +140,13 @@ def run_command(cmd, check=True):
         sys.exit(1)
 
 
+def run_build():
+    """Run the build for the release."""
+    print("Running build...")
+    run_command(["make", "build"])
+    print("Build passed.")
+
+
 def run_checks():
     """Run the checks for the release."""
     print("Running checks...")
