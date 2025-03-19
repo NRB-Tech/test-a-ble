@@ -5,7 +5,6 @@ A modular, extensible framework for testing Bluetooth Low Energy IoT devices.
 
 import logging
 import sys
-from typing import Optional
 
 __version__ = "0.1.0"
 

@@ -98,10 +98,26 @@ select = [
     "TRY", # tryceratops
     "RUF", # ruff-specific rules
 ]
+ignore = [
+    "T201", # ignore print usage
+    "TRY003", # ignore long messages when raising exceptions
+
+    # for now, ignore complexity warnings
+    "C901",
+    "PLR0911",
+    "PLR0912",
+    "PLR0915",
+
+]
 
 # Ignore assert usage in test files
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101", "ARG001"]
+"tests/*" = [
+    "S101", # ignore assert usage
+    "ARG001", # ignore unused arguments
+    "ARG002", # ignore unused arguments
+    "PLR2004", # ignore numerical comparisons
+]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

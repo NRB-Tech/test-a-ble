@@ -26,11 +26,11 @@ class BlinkyTests:
     These tests demonstrate controlling the LED and receiving button state notifications.
     """
 
-    async def setUp(self, ble_manager: BLEManager, test_context: TestContext):
+    async def setUp(self, _ble_manager: BLEManager, test_context: TestContext):
         """Set up the test environment."""
         test_context.debug("Setting up the test environment")
 
-    async def tearDown(self, ble_manager: BLEManager, test_context: TestContext):
+    async def tearDown(self, _ble_manager: BLEManager, test_context: TestContext):
         """Tear down the test environment."""
         test_context.debug("Tearing down the test environment")
 

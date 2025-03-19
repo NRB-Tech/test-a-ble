@@ -6,8 +6,8 @@ This script demonstrates how to run the Nordic Blinky example tests programmatic
 
 import asyncio
 import logging
-import os
 import sys
+from pathlib import Path
 
 from rich.console import Console
 from rich.logging import RichHandler
@@ -26,7 +26,7 @@ logger = logging.getLogger("nordic_example")
 console = Console()
 
 
-async def run_blinky_tests(device_name: str = None, device_address: str = None):
+async def run_blinky_tests(device_name: str | None = None, device_address: str | None = None):
     """Run the Nordic Blinky example tests."""
     console.print("[bold]Nordic Blinky Example Test Runner[/bold]\n")
 
@@ -66,8 +66,8 @@ async def run_blinky_tests(device_name: str = None, device_address: str = None):
 
         # Get the path to the nordic blinky tests directory
         # This ensures it works both when installed and when run from source
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        test_dir = os.path.join(current_dir, "nordic_blinky", "tests")
+        current_dir = Path(__file__).parent
+        test_dir = current_dir / "nordic_blinky" / "tests"
 
         console.print(f"[bold]Discovering tests in {test_dir}...[/bold]")
 

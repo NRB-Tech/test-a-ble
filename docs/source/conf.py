@@ -3,16 +3,16 @@
 This file contains the configuration settings for generating the project's documentation.
 """
 
-import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.abspath("../.."))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.resolve()))
 
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = "Test-a-BLE"
-copyright = "2025, NRB Tech Ltd"
+copyright = "2025, NRB Tech Ltd"  # noqa: A001
 author = "NRB Tech Ltd"
 release = "0.1.0"
 

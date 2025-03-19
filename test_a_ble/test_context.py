@@ -4,11 +4,12 @@ Provides environment for test execution.
 """
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections.abc import Callable
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.shortcuts import PromptSession
@@ -75,7 +76,7 @@ def ble_test_class(description=None):
 class TestStatus(Enum):
     """Enum for test execution status."""
 
-    PASS = "pass"  # nosec B105
+    PASS = "pass"  # nosec B105  # noqa: S105
     FAIL = "fail"
     SKIP = "skip"
     ERROR = "error"
@@ -86,7 +87,7 @@ class TestStatus(Enum):
         return self.value
 
 
-class TestException(Exception):
+class TestException(Exception):  # noqa: N818
     """Base class for test exceptions."""
 
     status = TestStatus.ERROR
@@ -123,12 +124,10 @@ class NotificationResult(Enum):
 
 # Type alias for notification expected value
 # Can be bytes for exact matching, a callable for custom evaluation, or None to match any notification
-# The callable should return a boolean (pass or fail), a notification result enum, or a tuple of
-# (NotificationResult, str)
+# The callable should return a boolean (pass or fail), a notification result enum,
+# or a tuple of (NotificationResult, str)
 # If the callable returns a NotificationResult of FAIL, the reason should be provided in the str
-NotificationExpectedValue = Optional[
-    bytes | Callable[[bytes], bool | NotificationResult | tuple[NotificationResult, str]]
-]
+NotificationExpectedValue = bytes | Callable[[bytes], bool | NotificationResult | tuple[NotificationResult, str]] | None
 
 
 class NotificationWaiter:
@@ -164,7 +163,7 @@ class NotificationWaiter:
             # User provided a lambda/function to evaluate the notification
             try:
                 result = current_expected(data)
-                if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], NotificationResult):
+                if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], NotificationResult):  # noqa: PLR2004
                     # Handle tuple return format: (NotificationResult, Optional[str])
                     notification_result, reason = result
                     if notification_result == NotificationResult.MATCH:
@@ -189,9 +188,9 @@ class NotificationWaiter:
                     return False, None
                 # True = match, False = ignore (not a failure)
                 return bool(result), None
-            except Exception as e:
+            except Exception:
                 # If the function raises an exception, log it but don't fail
-                logger.error(f"Error in notification evaluation function: {e}")
+                logger.exception("Error in notification evaluation function")
                 return False, None
         else:
             # Direct comparison with expected bytes
@@ -416,8 +415,8 @@ class TestContext:
                 # Remove from subscriptions
                 self.notification_subscriptions.pop(characteristic_uuid, None)
                 logger.debug(f"Successfully unsubscribed from {characteristic_uuid}")
-            except Exception as e:
-                logger.error(f"Error unsubscribing from {characteristic_uuid}: {e!s}")
+            except Exception:
+                logger.exception(f"Error unsubscribing from {characteristic_uuid}")
 
         logger.debug(f"Unsubscribed from all {len(characteristics)} active characteristics")
 
@@ -570,11 +569,11 @@ class TestContext:
                 await asyncio.sleep(0.5)
 
             except Exception as e:
-                logger.error(f"Error subscribing to characteristic: {e!s}")
+                logger.exception("Error subscribing to characteristic")
                 # Remove the waiter if we failed to subscribe
                 if characteristic_uuid in self.notification_subscriptions:
                     del self.notification_subscriptions[characteristic_uuid]
-                raise RuntimeError(f"Failed to subscribe: {e!s}")
+                raise RuntimeError(f"Failed to subscribe: {e!s}") from e
         else:
             # Already subscribed - reuse the existing subscription
             logger.debug(f"Using existing subscription to {characteristic_uuid}")
@@ -600,6 +599,7 @@ class TestContext:
             expected_value: If provided, validates the notification value. Can be:
                 - bytes: exact value to match
                 - callable: function that takes the notification data and returns a NotificationResult
+            process_collected_notifications: If True, process collected notifications
 
         Returns:
             NotificationWaiter instance
@@ -671,6 +671,7 @@ class TestContext:
             expected_value: If provided, validates the notification value. Can be:
                 - bytes: exact value to match
                 - callable: function that takes the notification data and returns a NotificationResult
+            process_collected_notifications: If True, process collected notifications
 
         Returns:
             Dictionary with notification details:
@@ -745,7 +746,8 @@ class TestContext:
             """
             print("\nThe test will continue automatically when event is detected.")
             print(
-                "If nothing happens, type 's' or 'skip' to skip, 'f' or 'fail' to fail the test, or 'd' for debug info.",
+                "If nothing happens, type 's' or 'skip' to skip, "
+                "'f' or 'fail' to fail the test, or 'd' for debug info.",
             )
 
             session = PromptSession()  # type: ignore
@@ -761,8 +763,8 @@ class TestContext:
                         # Task cancelled - exit cleanly
                         logger.debug("User input task cancelled")
                         break
-                    except Exception as e:
-                        logger.error(f"Error in user input handler: {e}")
+                    except Exception:
+                        logger.exception("Error in user input handler")
                         break
 
                     # Handle EOF or errors
@@ -846,10 +848,8 @@ class TestContext:
             for task in [notification_task, user_input_task]:
                 if not task.done():
                     task.cancel()
-                    try:
+                    with contextlib.suppress(TimeoutError, asyncio.CancelledError):
                         await asyncio.wait_for(task, timeout=0.1)
-                    except (TimeoutError, asyncio.CancelledError):
-                        pass
 
     def get_test_summary(self) -> dict[str, Any]:
         """Generate a summary of all test results.

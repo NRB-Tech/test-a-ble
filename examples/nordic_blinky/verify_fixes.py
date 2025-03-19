@@ -44,8 +44,8 @@ async def verify_led_control(ble_manager, test_context):
             test_context.log("LED ON verified by reading characteristic")
         else:
             test_context.log(f"LED state mismatch - expected {LED_ON.hex()}, got {led_state.hex()}")
-    except Exception as e:
-        logger.info(f"Could not read LED state: {e!s}")
+    except Exception:
+        logger.exception("Could not read LED state")
 
     # Ask user to verify
     response = test_context.prompt_user("Is the LED ON? (y/n)")
@@ -66,8 +66,8 @@ async def verify_led_control(ble_manager, test_context):
             test_context.log("LED OFF verified by reading characteristic")
         else:
             test_context.log(f"LED state mismatch - expected {LED_OFF.hex()}, got {led_state.hex()}")
-    except Exception as e:
-        logger.info(f"Could not read LED state: {e!s}")
+    except Exception:
+        logger.exception("Could not read LED state")
 
     # Ask user to verify
     response = test_context.prompt_user("Is the LED OFF? (y/n)")
@@ -77,7 +77,7 @@ async def verify_led_control(ble_manager, test_context):
     return test_context.end_test("pass", "LED control verification complete")
 
 
-async def verify_notification_handling(ble_manager, test_context):
+async def verify_notification_handling(_ble_manager: BLEManager, test_context: TestContext):
     """Test improved notification handling with user input option."""
     test_context.start_test("Notification Handling Verification")
 
@@ -100,9 +100,9 @@ async def verify_notification_handling(ble_manager, test_context):
         elif result["value"] == BUTTON_RELEASED:
             test_context.log("Detected button release event")
 
-    except Exception as e:
+    except Exception:
         # Only catch to ensure we end the test properly
-        test_context.log(f"Notification handling: {e!s}")
+        logger.exception("Notification handling")
 
     return test_context.end_test("pass", "Notification handling verification complete")
 

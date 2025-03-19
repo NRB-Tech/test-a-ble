@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import concurrent.futures
+import contextlib
 import logging
 import sys
 import time
@@ -22,10 +23,11 @@ from .test_runner import TestRunner
 console = Console()
 logger = logging.getLogger("ble_tester")
 
+TIME_BETWEEN_UPDATES = 3.0
+
 
 def get_console() -> Console:
     """Return the global console object for rich output."""
-    global console
     return console
 
 
@@ -109,7 +111,7 @@ async def dynamic_device_selection(ble_manager: BLEManager, timeout: float = 10.
                     force_update = True  # Force update when signal is received
                 except TimeoutError:
                     # Force update every 3 seconds regardless of signal
-                    if time.time() - last_update_time >= 3.0:
+                    if time.time() - last_update_time >= TIME_BETWEEN_UPDATES:
                         force_update = True
                     else:
                         continue  # No update needed
@@ -156,8 +158,8 @@ async def dynamic_device_selection(ble_manager: BLEManager, timeout: float = 10.
                         "[bold yellow]Press Enter for options or wait for devices to be discovered[/bold yellow]",
                     )
 
-            except Exception as e:
-                logger.error(f"Error updating UI: {e}")
+            except Exception:
+                logger.exception("Error updating UI")
                 await asyncio.sleep(0.5)  # Avoid tight loop on error
 
     # Create the tasks
@@ -242,17 +244,13 @@ async def dynamic_device_selection(ble_manager: BLEManager, timeout: float = 10.
         # Cancel any running tasks
         if not scan_task.done():
             scan_task.cancel()
-            try:
+            with contextlib.suppress(TimeoutError, asyncio.CancelledError):
                 await asyncio.wait_for(scan_task, timeout=1.0)
-            except (TimeoutError, asyncio.CancelledError):
-                pass
 
         if not ui_task.done():
             ui_task.cancel()
-            try:
+            with contextlib.suppress(TimeoutError, asyncio.CancelledError):
                 await asyncio.wait_for(ui_task, timeout=1.0)
-            except (TimeoutError, asyncio.CancelledError):
-                pass
 
     # Show selection menu after scan completes or user presses Enter
     if discovered_devices:
@@ -577,15 +575,15 @@ async def run_ble_tests(args):
         if "test_runner" in locals():
             try:
                 await test_runner.test_context.cleanup_tasks()
-            except Exception as e:
-                logger.error(f"Error cleaning up test context: {e}")
+            except Exception:
+                logger.exception("Error cleaning up test context")
 
         # Disconnect from device
         console.print("[bold]Disconnecting from device...[/bold]")
         try:
             await ble_manager.disconnect()
-        except Exception as e:
-            logger.error(f"Error during disconnect: {e}")
+        except Exception:
+            logger.exception("Error during disconnect")
 
         # More aggressive task cancellation to ensure clean exit
         # Get all tasks except the current one
@@ -729,21 +727,17 @@ def main():
                         task.cancel()
 
                     # Short wait for cancellation
-                    try:
+                    with contextlib.suppress(Exception):
                         loop.run_until_complete(asyncio.wait(remaining, timeout=1.0, loop=loop))
-                    except Exception:
-                        pass  # nosec B110
 
                 # Close the loop
-                try:
+                with contextlib.suppress(Exception):
                     loop.close()
-                except Exception:
-                    pass  # nosec B110
-            except Exception as e:
-                logger.debug(f"Error during keyboard interrupt cleanup: {e}")
+            except Exception:
+                logger.exception("Error during keyboard interrupt cleanup")
 
     except Exception as e:
-        logger.error(f"Error during test execution: {e}")
+        logger.exception("Error during test execution")
         console.print(f"\n[bold red]Error: {e!s}[/bold red]")
         if args.verbose:
             console.print_exception()
@@ -755,7 +749,7 @@ def main():
         # Log clean exit
         logger.debug("Exiting program")
 
-        return 0
+    return 0
 
 
 if __name__ == "__main__":
