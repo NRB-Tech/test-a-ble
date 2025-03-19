@@ -83,6 +83,9 @@ pre-commit: ## run pre-commit checks
 test: ## run tests quickly with the default Python
 	$(PY_CMD_PREFIX) pytest
 
+test-coverage: ## run tests with coverage
+	$(PY_CMD_PREFIX) pytest --cov=test_a_ble
+
 check: ## run all checks
 	$(PY_CMD_PREFIX) tox
 
