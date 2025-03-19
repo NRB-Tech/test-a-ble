@@ -13,3 +13,19 @@ repos:
     -   id: ruff
         args: [--fix]
     -   id: ruff-format
+
+-   repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0
+    hooks:
+    -   id: mypy
+        exclude: ^(examples)
+        args: [
+            --config-file, pyproject.toml,
+
+        ]
+        additional_dependencies: [
+            bleak==0.22.3,
+            rich==13.9.4,
+            packaging,
+            prompt_toolkit>=3.0.0,
+        ]

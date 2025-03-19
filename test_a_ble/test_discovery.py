@@ -83,9 +83,9 @@ def _import_package(package_path: Path, base_package: str = "") -> str:
     try:
         # Import the package
         spec = importlib.util.spec_from_file_location(full_package_name, init_path)
-        if not spec or not spec.loader:
+        if spec is None or spec.loader is None:
             # Use a function to abstract the raise
-            _raise_import_error(f"Failed to load module spec for {init_path}")
+            raise ImportError(f"Failed to load module spec for {init_path}")  # noqa: TRY301
 
         module = importlib.util.module_from_spec(spec)
         sys.modules[full_package_name] = module
@@ -97,18 +97,6 @@ def _import_package(package_path: Path, base_package: str = "") -> str:
         raise ImportError(f"Error importing package {full_package_name}") from e
     else:
         return full_package_name
-
-
-def _raise_import_error(message: str) -> None:
-    """Raise an ImportError with the given message.
-
-    Args:
-        message: Error message
-
-    Raises:
-        ImportError: Always raised with the provided message
-    """
-    raise ImportError(message)
 
 
 def find_and_import_nearest_package(path: Path) -> tuple[str, Path] | None:
@@ -223,7 +211,7 @@ def _import_module_from_file(import_name: str, file_path: Path) -> Any:
     """
     spec = importlib.util.spec_from_file_location(import_name, file_path)
 
-    if not spec or not spec.loader:
+    if spec is None or spec.loader is None:
         raise ImportError(f"Failed to load module spec for {file_path}")
 
     module = importlib.util.module_from_spec(spec)
