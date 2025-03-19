@@ -119,3 +119,14 @@ ifdef USE_UV
 else
 	pip install -e ".[dev]"
 endif
+
+# If the first argument is "run"...
+ifeq (release,$(firstword $(MAKECMDGOALS)))
+  # use the rest as arguments for "run"
+  RUN_ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+  # ...and turn them into do-nothing targets
+  $(eval $(RUN_ARGS):;@:)
+endif
+
+release: ## release the package
+	$(PY_CMD_PREFIX) python scripts/release.py $(RUN_ARGS)

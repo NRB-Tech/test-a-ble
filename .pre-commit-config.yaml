@@ -18,10 +18,9 @@ repos:
     rev: v1.15.0
     hooks:
     -   id: mypy
-        exclude: ^(examples)
+        exclude: ^(examples|scripts)
         args: [
             --config-file, pyproject.toml,
-
         ]
         additional_dependencies: [
             bleak==0.22.3,
@@ -29,3 +28,9 @@ repos:
             packaging,
             prompt_toolkit>=3.0.0,
         ]
+
+-   repo: https://github.com/PyCQA/bandit
+    rev: '1.8.3'
+    hooks:
+    - id: bandit
+      args: [ -c, pyproject.toml, "-r", "."]

@@ -162,28 +162,20 @@ skip_missing_interpreters = false
 runner = "uv-venv-lock-runner"
 description = "Run test under {base_python}"
 dependency_groups = ["test"]
-commands = [["pytest"]]
+commands = [["make", "test"]]
+allowlist_externals = ["make"]
 
 [tool.tox.env.lint]
-runner = "uv-venv-lock-runner"
 description = "format and lint code"
 dependency_groups = ["lint"]
-commands = [
-    ["ruff", "check", "."],
-    ["ruff", "format", "."],
-]
+commands = [["make", "lint"]]
 
 [tool.tox.env.format]
-runner = "uv-venv-lock-runner"
 description = "format code"
 dependency_groups = ["lint"]
-commands = [
-    ["ruff", "format", "."],
-    ["ruff", "check", "--select", "I", "--fix", "."],
-]
+commands = [["make", "format"]]
 
 [tool.tox.env.type]
-runner = "uv-venv-lock-runner"
 description = "type check code"
 dependency_groups = ["type"]
-commands = [["mypy"]]
+commands = [["make", "typecheck"]]
