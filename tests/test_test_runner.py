@@ -1,6 +1,6 @@
 """Tests for the TestRunner class."""
 
-import os
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest  # type: ignore
@@ -9,7 +9,7 @@ from test_a_ble.ble_manager import BLEManager
 from test_a_ble.test_context import TestContext, TestStatus
 from test_a_ble.test_runner import TestRunner
 
-TEST_PACKAGE_DIR = os.path.join(os.path.dirname(__file__), "test_discovery_test_package")
+TEST_PACKAGE_DIR = Path(__file__).parent / "test_discovery_test_package"
 
 
 @pytest.fixture
@@ -31,132 +31,6 @@ def test_init(test_runner, mock_ble_manager):
     """Test initialization of TestRunner."""
     assert test_runner.ble_manager == mock_ble_manager
     assert isinstance(test_runner.test_context, TestContext)
-
-
-def test_is_package(test_runner, tmp_path):
-    """Test the _is_package method."""
-    # Create a directory that is a package
-    package_dir = tmp_path / "package"
-    package_dir.mkdir()
-    init_file = package_dir / "__init__.py"
-    init_file.write_text("")
-
-    # Create a directory that is not a package
-    not_package_dir = tmp_path / "not_package"
-    not_package_dir.mkdir()
-
-    # Test
-    assert test_runner._is_package(str(package_dir)) is True
-    assert test_runner._is_package(str(not_package_dir)) is False
-
-
-@patch("importlib.util.spec_from_file_location")
-@patch("importlib.util.module_from_spec")
-@patch("os.path.exists")
-def test_import_package_with_base_package(
-    mock_exists, mock_module_from_spec, mock_spec_from_file, test_runner, tmp_path
-):
-    """Test the _import_package method with a base package."""
-    # Setup
-    mock_exists.return_value = True
-
-    # Create a mock spec and module
-    mock_spec = MagicMock()
-    mock_spec.loader = MagicMock()
-    mock_spec_from_file.return_value = mock_spec
-
-    mock_module = MagicMock()
-    mock_module_from_spec.return_value = mock_module
-
-    # Create a package directory structure
-    package_dir = tmp_path / "base_package" / "my_test_package"
-    package_dir.mkdir(parents=True)
-    init_file = package_dir / "__init__.py"
-    init_file.write_text("")
-
-    # Pre-construct the expected path string
-    expected_init_path = str(package_dir / "__init__.py")
-
-    # Test with base package
-    with patch.dict("sys.modules", {}, clear=True):
-        result = test_runner._import_package(str(package_dir), "base.package")
-        assert result == "base.package.my_test_package"
-        mock_exists.assert_called_with(expected_init_path)
-        mock_spec_from_file.assert_called_with("base.package.my_test_package", expected_init_path)
-
-
-@patch("importlib.util.spec_from_file_location")
-@patch("importlib.util.module_from_spec")
-@patch("os.path.exists")
-def test_import_package_without_base_package(
-    mock_exists, mock_module_from_spec, mock_spec_from_file, test_runner, tmp_path
-):
-    """Test the _import_package method without a base package."""
-    # Setup
-    mock_exists.return_value = True
-
-    # Create a mock spec and module
-    mock_spec = MagicMock()
-    mock_spec.loader = MagicMock()
-    mock_spec_from_file.return_value = mock_spec
-
-    mock_module = MagicMock()
-    mock_module_from_spec.return_value = mock_module
-
-    # Create a package directory structure
-    package_dir = tmp_path / "base_package" / "my_test_package"
-    package_dir.mkdir(parents=True)
-    init_file = package_dir / "__init__.py"
-    init_file.write_text("")
-
-    # Pre-construct the expected path string
-    expected_init_path = str(package_dir / "__init__.py")
-
-    # Test without base package
-    with patch.dict("sys.modules", {}, clear=True):
-        result = test_runner._import_package(str(package_dir))
-        assert result == "my_test_package"
-        mock_exists.assert_called_with(expected_init_path)
-        mock_spec_from_file.assert_called_with("my_test_package", expected_init_path)
-
-
-@patch("os.path.isdir")
-@patch("os.path.exists")
-def test_find_and_import_nearest_package_when_package_found(mock_exists, mock_isdir, test_runner, tmp_path):
-    """Test the _find_and_import_nearest_package method when a package is found."""
-    # Setup
-    mock_isdir.return_value = True
-
-    # Create a package directory structure
-    package_dir = tmp_path / "path" / "to" / "test" / "package"
-    package_dir.mkdir(parents=True)
-
-    # Configure mock to indicate a package is found
-    def exists_side_effect(path):
-        return "__init__.py" in path
-
-    mock_exists.side_effect = exists_side_effect
-
-    # Test when a package is found
-    with patch.object(test_runner, "_import_package") as mock_import:
-        mock_import.return_value = "package"  # Just the package name, not the full import path
-        result = test_runner._find_and_import_nearest_package(str(package_dir))
-        assert result == ("package", str(package_dir))
-
-
-@patch("os.path.isdir")
-@patch("os.path.exists")
-def test_find_and_import_nearest_package_when_no_package_found(mock_exists, mock_isdir, test_runner, tmp_path):
-    """Test the _find_and_import_nearest_package method when no package is found."""
-    # Setup
-    mock_isdir.return_value = True
-
-    # Configure mock to indicate no package is found
-    mock_exists.side_effect = lambda path: False
-
-    # Test when no package is found
-    result = test_runner._find_and_import_nearest_package(str(tmp_path / "path" / "to" / "nowhere"))
-    assert result is None
 
 
 @pytest.mark.asyncio

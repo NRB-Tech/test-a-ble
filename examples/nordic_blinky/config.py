@@ -1,5 +1,4 @@
-"""
-Nordic Blinky Example Configuration.
+"""Nordic Blinky Example Configuration.
 
 Configuration for the Nordic Semiconductor BLE Blinky sample application.
 """

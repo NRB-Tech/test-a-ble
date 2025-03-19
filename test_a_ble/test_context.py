@@ -1,14 +1,15 @@
-"""
-Test Context for BLE tests.
+"""Test Context for BLE tests.
 
 Provides environment for test execution.
 """
 
 import asyncio
+import contextlib
 import logging
 import time
+from collections.abc import Callable
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.shortcuts import PromptSession
@@ -20,8 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Decorator for test functions
 def ble_test(description=None):
-    """
-    Decorate a BLE test function.
+    """Decorate a BLE test function.
 
     Args:
         description: Description of the test (optional, will use function name if not provided)
@@ -48,8 +48,7 @@ def ble_test(description=None):
 
 # Decorator for test classes
 def ble_test_class(description=None):
-    """
-    Decorate a BLE test class.
+    """Decorate a BLE test class.
 
     Args:
         description: Description of the test class (optional, will use class name if not provided)
@@ -77,7 +76,7 @@ def ble_test_class(description=None):
 class TestStatus(Enum):
     """Enum for test execution status."""
 
-    PASS = "pass"  # nosec B105
+    PASS = "pass"  # nosec B105  # noqa: S105
     FAIL = "fail"
     SKIP = "skip"
     ERROR = "error"
@@ -88,7 +87,7 @@ class TestStatus(Enum):
         return self.value
 
 
-class TestException(Exception):
+class TestException(Exception):  # noqa: N818
     """Base class for test exceptions."""
 
     status = TestStatus.ERROR
@@ -125,15 +124,10 @@ class NotificationResult(Enum):
 
 # Type alias for notification expected value
 # Can be bytes for exact matching, a callable for custom evaluation, or None to match any notification
-# The callable should return a boolean (pass or fail), a notification result enum, or a tuple of
-# (NotificationResult, str)
+# The callable should return a boolean (pass or fail), a notification result enum,
+# or a tuple of (NotificationResult, str)
 # If the callable returns a NotificationResult of FAIL, the reason should be provided in the str
-NotificationExpectedValue = Optional[
-    Union[
-        bytes,
-        Callable[[bytes], Union[bool, NotificationResult, Tuple[NotificationResult, str]]],
-    ]
-]
+NotificationExpectedValue = bytes | Callable[[bytes], bool | NotificationResult | tuple[NotificationResult, str]] | None
 
 
 class NotificationWaiter:
@@ -144,13 +138,12 @@ class NotificationWaiter:
         self.characteristic_uuid = characteristic_uuid
         self.expected_value = expected_value
         self.received_notifications: list[bytes] = []
-        self.matching_notification: Optional[bytes] = None
-        self.failure_reason: Optional[str] = None
+        self.matching_notification: bytes | None = None
+        self.failure_reason: str | None = None
         self.complete_event = asyncio.Event()
 
-    def check_notification(self, data: bytes) -> Tuple[bool, Optional[str]]:
-        """
-        Check if a notification matches our criteria.
+    def check_notification(self, data: bytes) -> tuple[bool, str | None]:
+        """Check if a notification matches our criteria.
 
         Args:
             data: The notification data to check
@@ -170,35 +163,34 @@ class NotificationWaiter:
             # User provided a lambda/function to evaluate the notification
             try:
                 result = current_expected(data)
-                if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], NotificationResult):
+                if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], NotificationResult):  # noqa: PLR2004
                     # Handle tuple return format: (NotificationResult, Optional[str])
                     notification_result, reason = result
                     if notification_result == NotificationResult.MATCH:
                         return True, None
-                    elif notification_result == NotificationResult.FAIL:
+                    if notification_result == NotificationResult.FAIL:
                         return (
                             False,
                             reason or f"Notification evaluated as failure condition: {data.hex()}",
                         )
-                    else:  # IGNORE
-                        return False, None
-                elif isinstance(result, NotificationResult):
+                    # IGNORE
+                    return False, None
+                if isinstance(result, NotificationResult):
                     # Handle direct NotificationResult enum
                     if result == NotificationResult.MATCH:
                         return True, None
-                    elif result == NotificationResult.FAIL:
+                    if result == NotificationResult.FAIL:
                         return (
                             False,
                             f"Notification evaluated as failure condition: {data.hex()}",
                         )
-                    else:  # IGNORE
-                        return False, None
-                else:
-                    # True = match, False = ignore (not a failure)
-                    return bool(result), None
-            except Exception as e:
+                    # IGNORE
+                    return False, None
+                # True = match, False = ignore (not a failure)
+                return bool(result), None
+            except Exception:
                 # If the function raises an exception, log it but don't fail
-                logger.error(f"Error in notification evaluation function: {e}")
+                logger.exception("Error in notification evaluation function")
                 return False, None
         else:
             # Direct comparison with expected bytes
@@ -208,8 +200,7 @@ class NotificationWaiter:
             )
 
     def on_notification(self, data) -> bool:
-        """
-        Handle a notification.
+        """Handle a notification.
 
         Args:
             data: The notification data
@@ -231,21 +222,20 @@ class NotificationWaiter:
             self.matching_notification = data
             self.complete_event.set()
             return True
-        elif failure_reason:
+        if failure_reason:
             # We have a failure condition from the notification
             logger.debug(f"Notification indicates failure: {failure_reason}")
             self.failure_reason = failure_reason
             self.complete_event.set()
             return False
-        else:
-            logger.debug("Notification in callback didn't match criteria")
-            return False
+        logger.debug("Notification in callback didn't match criteria")
+        return False
 
 
 class NotificationSubscription:
     """A helper class to manage notification subscriptions and waiters."""
 
-    def __init__(self, characteristic_uuid: str, initial_waiter: Optional[NotificationWaiter] = None):
+    def __init__(self, characteristic_uuid: str, initial_waiter: NotificationWaiter | None = None):
         """Initialize the notification subscription."""
         self.characteristic_uuid = characteristic_uuid
         self.waiter = initial_waiter
@@ -256,7 +246,7 @@ class NotificationSubscription:
         self.collected_notifications.append(data)
         logger.debug(
             f"Notification callback received: {data.hex() if data else 'None'}, "
-            f"{len(self.collected_notifications)} notifications collected"
+            f"{len(self.collected_notifications)} notifications collected",
         )
         if self.waiter is None:
             return
@@ -281,8 +271,7 @@ class NotificationSubscription:
 
 
 class TestContext:
-    """
-    Context for test execution.
+    """Context for test execution.
 
     Provides access to the BLE device and helper methods for test operations.
     """
@@ -291,13 +280,12 @@ class TestContext:
         """Initialize the test context."""
         self.ble_manager = ble_manager
         self.start_time = time.time()
-        self.test_results: Dict[str, Dict[str, Any]] = {}
-        self.current_test: Optional[str] = None
-        self.notification_subscriptions: Dict[str, NotificationSubscription] = {}
+        self.test_results: dict[str, dict[str, Any]] = {}
+        self.current_test: str | None = None
+        self.notification_subscriptions: dict[str, NotificationSubscription] = {}
 
-    def print_formatted_box(self, title: str, messages: List[str]) -> None:
-        """
-        Print a formatted box with consistent alignment.
+    def print_formatted_box(self, title: str, messages: list[str]) -> None:
+        """Print a formatted box with consistent alignment.
 
         Args:
             title: The title to display at the top of the box
@@ -348,8 +336,7 @@ class TestContext:
         print("╚" + "═" * (box_width - 2) + "╝")
 
     def print(self, message: str) -> None:
-        """
-        Print a message directly to the console for user-facing output.
+        """Print a message directly to the console for user-facing output.
 
         Use this for information that should always be visible to the user,
         regardless of log level settings.
@@ -376,12 +363,11 @@ class TestContext:
                     "timestamp": time.time(),
                     "level": "USER",  # Special level to mark user-facing output
                     "message": clean_message,
-                }
+                },
             )
 
     def prompt_user(self, message: str) -> str:
-        """
-        Display a prompt to the user and wait for input.
+        """Display a prompt to the user and wait for input.
 
         Args:
             message: The message to display to the user
@@ -397,8 +383,7 @@ class TestContext:
         return response
 
     def start_test(self, test_name: str) -> None:
-        """
-        Start a new test and record the start time.
+        """Start a new test and record the start time.
 
         Args:
             test_name: Name of the test being started
@@ -413,8 +398,7 @@ class TestContext:
         logger.debug(f"Starting test: {test_name}")
 
     async def unsubscribe_all(self) -> None:
-        """
-        Unsubscribe from all active notification subscriptions.
+        """Unsubscribe from all active notification subscriptions.
 
         Call this at the end of a test to clean up resources.
         """
@@ -431,14 +415,13 @@ class TestContext:
                 # Remove from subscriptions
                 self.notification_subscriptions.pop(characteristic_uuid, None)
                 logger.debug(f"Successfully unsubscribed from {characteristic_uuid}")
-            except Exception as e:
-                logger.error(f"Error unsubscribing from {characteristic_uuid}: {str(e)}")
+            except Exception:
+                logger.exception(f"Error unsubscribing from {characteristic_uuid}")
 
         logger.debug(f"Unsubscribed from all {len(characteristics)} active characteristics")
 
     async def cleanup_tasks(self):
-        """
-        Clean up any remaining async tasks created during testing.
+        """Clean up any remaining async tasks created during testing.
 
         This should be called before program exit.
         """
@@ -448,9 +431,8 @@ class TestContext:
         # Clear any remaining state
         logger.debug("Cleanup tasks completed")
 
-    def end_test(self, status: Union[TestStatus, str], message: str = "") -> Dict[str, Any]:
-        """
-        End the current test and record results.
+    def end_test(self, status: TestStatus | str, message: str = "") -> dict[str, Any]:
+        """End the current test and record results.
 
         Args:
             status: Test status (TestStatus enum or string value)
@@ -484,7 +466,7 @@ class TestContext:
                 "duration": end_time - self.test_results[test_name]["start_time"],
                 "status": status_value,
                 "message": message,
-            }
+            },
         )
 
         # Define color codes for different statuses
@@ -513,8 +495,7 @@ class TestContext:
         return self.test_results[test_name]
 
     def log(self, message: str, level: str = "info") -> None:
-        """
-        Log a message within the current test context.
+        """Log a message within the current test context.
 
         Args:
             message: Message to log
@@ -526,7 +507,7 @@ class TestContext:
         # Always store in test results with level information for later retrieval
         if self.current_test:
             self.test_results[self.current_test]["logs"].append(
-                {"timestamp": time.time(), "level": level.upper(), "message": message}
+                {"timestamp": time.time(), "level": level.upper(), "message": message},
             )
 
         # Only display INFO and DEBUG logs in the console if the test fails
@@ -562,11 +543,10 @@ class TestContext:
     async def subscribe_to_characteristic(
         self,
         characteristic_uuid: str,
-        waiter: Optional[NotificationWaiter] = None,
+        waiter: NotificationWaiter | None = None,
         process_collected_notifications: bool = True,
     ):
-        """
-        Subscribe to a characteristic and create a waiter if provided.
+        """Subscribe to a characteristic and create a waiter if provided.
 
         Args:
             characteristic_uuid: UUID of characteristic to subscribe to
@@ -589,11 +569,11 @@ class TestContext:
                 await asyncio.sleep(0.5)
 
             except Exception as e:
-                logger.error(f"Error subscribing to characteristic: {str(e)}")
+                logger.exception("Error subscribing to characteristic")
                 # Remove the waiter if we failed to subscribe
                 if characteristic_uuid in self.notification_subscriptions:
                     del self.notification_subscriptions[characteristic_uuid]
-                raise RuntimeError(f"Failed to subscribe: {str(e)}")
+                raise RuntimeError(f"Failed to subscribe: {e!s}") from e
         else:
             # Already subscribed - reuse the existing subscription
             logger.debug(f"Using existing subscription to {characteristic_uuid}")
@@ -612,14 +592,14 @@ class TestContext:
         expected_value: NotificationExpectedValue = None,
         process_collected_notifications: bool = True,
     ) -> NotificationWaiter:
-        """
-        Create a notification waiter for a characteristic.
+        """Create a notification waiter for a characteristic.
 
         Args:
             characteristic_uuid: UUID of characteristic to wait for notification
             expected_value: If provided, validates the notification value. Can be:
                 - bytes: exact value to match
                 - callable: function that takes the notification data and returns a NotificationResult
+            process_collected_notifications: If True, process collected notifications
 
         Returns:
             NotificationWaiter instance
@@ -630,9 +610,8 @@ class TestContext:
 
         return waiter
 
-    def handle_notification_waiter_result(self, waiter: NotificationWaiter, timeout: float) -> Dict[str, Any]:
-        """
-        Handle the result of a notification waiter.
+    def handle_notification_waiter_result(self, waiter: NotificationWaiter, timeout: float) -> dict[str, Any]:
+        """Handle the result of a notification waiter.
 
         Args:
             waiter: The notification waiter to check
@@ -651,32 +630,31 @@ class TestContext:
         if waiter.matching_notification:
             logger.debug(
                 "Found matching notification: "
-                f"{waiter.matching_notification.hex() if waiter.matching_notification else 'None'}"
+                f"{waiter.matching_notification.hex() if waiter.matching_notification else 'None'}",
             )
             return {
                 "value": waiter.matching_notification,
                 "success": True,
                 "received_notifications": waiter.received_notifications,
             }
-        elif waiter.failure_reason:
+        if waiter.failure_reason:
             # We got a failure notification
             logger.info(f"Test failed due to notification: {waiter.failure_reason}")
             raise TestFailure(waiter.failure_reason)
-        elif waiter.received_notifications:
+        if waiter.received_notifications:
             # We got notifications but none matched our expected value
             logger.info(
-                f"Received {len(waiter.received_notifications)} notifications, but none matched the expected value"
+                f"Received {len(waiter.received_notifications)} notifications, but none matched the expected value",
             )
             for i, notif in enumerate(waiter.received_notifications):
-                logger.debug(f"Notification {i+1}: {notif.hex() if notif else 'None'}")
+                logger.debug(f"Notification {i + 1}: {notif.hex() if notif else 'None'}")
 
             # Raise exception for non-matching notifications
             raise TestFailure(
-                f"No matching notification received. Got: {', '.join(n.hex() for n in waiter.received_notifications)}"
+                f"No matching notification received. Got: {', '.join(n.hex() for n in waiter.received_notifications)}",
             )
-        else:
-            # Raise timeout error with user-friendly message
-            raise TimeoutError(f"No notification received within {timeout} seconds")
+        # Raise timeout error with user-friendly message
+        raise TimeoutError(f"No notification received within {timeout} seconds")
 
     async def wait_for_notification(
         self,
@@ -684,9 +662,8 @@ class TestContext:
         timeout: float = 10.0,
         expected_value: NotificationExpectedValue = None,
         process_collected_notifications: bool = True,
-    ) -> Dict[str, Any]:
-        """
-        Wait for a notification from a characteristic without user interaction.
+    ) -> dict[str, Any]:
+        """Wait for a notification from a characteristic without user interaction.
 
         Args:
             characteristic_uuid: UUID of characteristic to wait for notification
@@ -694,6 +671,7 @@ class TestContext:
             expected_value: If provided, validates the notification value. Can be:
                 - bytes: exact value to match
                 - callable: function that takes the notification data and returns a NotificationResult
+            process_collected_notifications: If True, process collected notifications
 
         Returns:
             Dictionary with notification details:
@@ -706,7 +684,9 @@ class TestContext:
             TestFailure: If a notification is received but doesn't match expected criteria
         """
         waiter = await self.create_notification_waiter(
-            characteristic_uuid, expected_value, process_collected_notifications
+            characteristic_uuid,
+            expected_value,
+            process_collected_notifications,
         )
 
         try:
@@ -717,7 +697,7 @@ class TestContext:
             try:
                 await asyncio.wait_for(notification_future, timeout)
                 logger.debug("Notification received before timeout")
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.info(f"Timed out waiting for notification after {timeout} seconds")
                 if notification_future.cancel():
                     logger.debug("Successfully cancelled notification future")
@@ -731,9 +711,8 @@ class TestContext:
         characteristic_uuid: str,
         timeout: float = 10.0,
         expected_value: NotificationExpectedValue = None,
-    ) -> Dict[str, Any]:
-        """
-        Wait for a notification from a characteristic with user interaction support.
+    ) -> dict[str, Any]:
+        """Wait for a notification from a characteristic with user interaction support.
 
         This method will display a prompt to the user and wait for a notification.
         The user can type 's' or 'skip' to skip the test, or 'f' or 'fail' to fail it.
@@ -759,16 +738,16 @@ class TestContext:
             TimeoutError: If no notification is received within the timeout
         """
 
-        async def user_input_handler() -> Optional[Tuple[str, str]]:
-            """
-            Handle user input during the waiting period.
+        async def user_input_handler() -> tuple[str, str] | None:
+            """Handle user input during the waiting period.
 
             Returns:
                 Tuple of user response and message, or None if user input is cancelled
             """
             print("\nThe test will continue automatically when event is detected.")
             print(
-                "If nothing happens, type 's' or 'skip' to skip, 'f' or 'fail' to fail the test, or 'd' for debug info."
+                "If nothing happens, type 's' or 'skip' to skip, "
+                "'f' or 'fail' to fail the test, or 'd' for debug info.",
             )
 
             session = PromptSession()  # type: ignore
@@ -784,8 +763,8 @@ class TestContext:
                         # Task cancelled - exit cleanly
                         logger.debug("User input task cancelled")
                         break
-                    except Exception as e:
-                        logger.error(f"Error in user input handler: {e}")
+                    except Exception:
+                        logger.exception("Error in user input handler")
                         break
 
                     # Handle EOF or errors
@@ -798,9 +777,9 @@ class TestContext:
                     # Process based on user input
                     if user_input in ["s", "skip"]:
                         return ("skip", "User chose to skip the test")
-                    elif user_input in ["f", "fail"]:
+                    if user_input in ["f", "fail"]:
                         return ("fail", "User reported test failure")
-                    elif user_input == "d":
+                    if user_input == "d":
                         # Debug - show received notifications
                         if characteristic_uuid not in self.notification_subscriptions:
                             print(f"No subscription to {characteristic_uuid}")
@@ -817,7 +796,7 @@ class TestContext:
 
                         print(f"Received {len(sub.waiter.received_notifications)} notifications so far:")
                         for i, n in enumerate(sub.waiter.received_notifications):
-                            print(f"  Notification {i+1}: {n.hex() if n else 'None'}")
+                            print(f"  Notification {i + 1}: {n.hex() if n else 'None'}")
                             is_match, _ = sub.waiter.check_notification(n)
                             if is_match:
                                 print("  --> This notification MATCHES the expected criteria")
@@ -850,7 +829,7 @@ class TestContext:
             if notification_task in done:
                 logger.info("Notification task completed first")
                 return self.handle_notification_waiter_result(waiter, timeout)
-            elif user_input_task in done:
+            if user_input_task in done:
                 # User input finished first
                 if result := user_input_task.result():
                     user_response, message = result
@@ -859,10 +838,9 @@ class TestContext:
                 # Raise appropriate exception based on user input
                 if user_response == "skip":
                     raise TestSkip("User chose to skip test")
-                elif user_response == "fail":
+                if user_response == "fail":
                     raise TestFailure("User reported test failure")
-                else:
-                    raise ValueError(f"Invalid user response: {user_response}")
+                raise ValueError(f"Invalid user response: {user_response}")
 
             raise TimeoutError("Timeout occurred while waiting for notification or user input")
         finally:
@@ -870,14 +848,11 @@ class TestContext:
             for task in [notification_task, user_input_task]:
                 if not task.done():
                     task.cancel()
-                    try:
+                    with contextlib.suppress(TimeoutError, asyncio.CancelledError):
                         await asyncio.wait_for(task, timeout=0.1)
-                    except (asyncio.TimeoutError, asyncio.CancelledError):
-                        pass
 
-    def get_test_summary(self) -> Dict[str, Any]:
-        """
-        Generate a summary of all test results.
+    def get_test_summary(self) -> dict[str, Any]:
+        """Generate a summary of all test results.
 
         Returns:
             Dictionary with test summary statistics

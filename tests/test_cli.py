@@ -69,7 +69,10 @@ async def test_print_test_results(mock_console):
 @patch("test_a_ble.cli.print_test_results")
 @patch("test_a_ble.cli.console")
 async def test_run_ble_tests_with_address(
-    mock_console, mock_print_results, mock_ble_manager_class, mock_test_runner_class
+    mock_console,
+    mock_print_results,
+    mock_ble_manager_class,
+    mock_test_runner_class,
 ):
     """Test running BLE tests with a specific device address."""
     # Setup mocks
@@ -98,7 +101,7 @@ async def test_run_ble_tests_with_address(
                 "status": TestStatus.PASS,
                 "message": "Test passed",
                 "duration": 0.1,
-            }
+            },
         ],
     }
     mock_test_runner_class.return_value = mock_test_runner
@@ -131,7 +134,10 @@ async def test_run_ble_tests_with_address(
 @patch("test_a_ble.cli.print_test_results")
 @patch("test_a_ble.cli.console")
 async def test_run_ble_tests_with_name(
-    mock_console, mock_print_results, mock_ble_manager_class, mock_test_runner_class
+    mock_console,
+    mock_print_results,
+    mock_ble_manager_class,
+    mock_test_runner_class,
 ):
     """Test running BLE tests with a device name filter."""
     # Setup mocks
@@ -168,7 +174,7 @@ async def test_run_ble_tests_with_name(
                 "status": TestStatus.PASS,
                 "message": "Test passed",
                 "duration": 0.1,
-            }
+            },
         ],
     }
     mock_test_runner_class.return_value = mock_test_runner
@@ -238,7 +244,7 @@ async def test_run_ble_tests_interactive(
                 "status": TestStatus.PASS,
                 "message": "Test passed",
                 "duration": 0.1,
-            }
+            },
         ],
     }
     mock_test_runner_class.return_value = mock_test_runner

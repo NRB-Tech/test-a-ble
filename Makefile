@@ -59,13 +59,12 @@ clean-test: ## remove test and coverage artifacts
 	rm -fr .pytest_cache/
 
 lint: ## check style
-	$(PY_CMD_PREFIX) black --check .
-	$(PY_CMD_PREFIX) isort --check .
-	$(PY_CMD_PREFIX) flake8 .
+	$(PY_CMD_PREFIX) ruff check .
+	$(PY_CMD_PREFIX) ruff format --check .
 
 format: ## format code
-	$(PY_CMD_PREFIX) black .
-	$(PY_CMD_PREFIX) isort .
+	$(PY_CMD_PREFIX) ruff format .
+	$(PY_CMD_PREFIX) ruff check --fix .
 
 typecheck: ## type check code
 	$(PY_CMD_PREFIX) mypy
@@ -83,6 +82,9 @@ pre-commit: ## run pre-commit checks
 
 test: ## run tests quickly with the default Python
 	$(PY_CMD_PREFIX) pytest
+
+test-coverage: ## run tests with coverage
+	$(PY_CMD_PREFIX) pytest --cov=test_a_ble
 
 check: ## run all checks
 	$(PY_CMD_PREFIX) tox

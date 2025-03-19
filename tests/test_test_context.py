@@ -156,7 +156,8 @@ async def test_subscribe_to_characteristic(test_context, mock_ble_manager):
 
     # Check that the BLE manager was called
     mock_ble_manager.subscribe_to_characteristic.assert_called_once_with(
-        char_uuid, test_context.notification_subscriptions[char_uuid].on_notification
+        char_uuid,
+        test_context.notification_subscriptions[char_uuid].on_notification,
     )
 
 
@@ -302,10 +303,9 @@ async def test_notification_waiter():
     def check_notification_enum(data):
         if data[0] == 0x01:
             return NotificationResult.MATCH
-        elif data[0] == 0x02:
+        if data[0] == 0x02:
             return NotificationResult.FAIL
-        else:
-            return NotificationResult.IGNORE
+        return NotificationResult.IGNORE
 
     waiter = NotificationWaiter(char_uuid, check_notification_enum)
 
