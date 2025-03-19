@@ -159,6 +159,19 @@ def run_git_command(cmd, check=True):
     return run_command(["git", *cmd], check=check)
 
 
+def check_tag_exists(tag_name):
+    """Check if a git tag already exists."""
+    result = run_git_command(["tag", "-l", tag_name], check=False)
+    return tag_name in result.stdout.splitlines()
+
+
+def delete_tag(tag_name, remote=False):
+    """Delete a git tag locally and optionally from remote."""
+    run_git_command(["tag", "-d", tag_name])
+    if remote:
+        run_git_command(["push", "origin", f":refs/tags/{tag_name}"], check=False)
+
+
 def main():
     """Execute the main function."""
     parser = argparse.ArgumentParser(description="Bump the version of the package.")
@@ -198,7 +211,19 @@ def main():
         print("Running git commands...")
         if args.part:
             run_git_command(["commit", "-am", f"Bump version to {new_version}"])
-        run_git_command(["tag", "-a", f"v{new_version}", "-m", f"Version {new_version}"])
+
+        tag_name = f"v{new_version}"
+        if check_tag_exists(tag_name):
+            print(f"\nTag {tag_name} already exists!")
+            print("Do you want to delete the existing tag and recreate it? (y/n)")
+            retag_response = input().strip().lower()
+            if retag_response in {"y", "yes"}:
+                delete_tag(tag_name, remote=True)
+            else:
+                print("Aborting tag creation.")
+                return
+
+        run_git_command(["tag", "-a", tag_name, "-m", f"Version {new_version}"])
 
         print("Do you want to push the changes? (y/n)")
         push_response = input().strip().lower()
